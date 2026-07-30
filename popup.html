@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Mindful Access</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Arial, sans-serif;
+    width: 320px;
+    padding: 14px;
+    background: #14161a;
+    color: #e8e8ec;
+  }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #262a31; font-size: 13px; }
+  .row:last-child { border-bottom: none; }
+  button {
+    border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .primary { background: #8ab4f8; color: #14161a; }
+  .danger { background: #3a2020; color: #f28b82; }
+  .muted { color: #8b8f98; font-size: 12px; }
+  #currentSite { margin-bottom: 14px; padding: 10px; border-radius: 8px; background: #1e2126; }
+  #sites { max-height: 160px; overflow-y: auto; margin-bottom: 10px; }
+  a { color: #8ab4f8; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div id="currentSite"></div>
+
+  <h2>Managed sites</h2>
+  <div id="sites"></div>
+
+  <a href="options.html" target="_blank">Open full settings &amp; history</a>
+
+  <script src="popup.js"></script>
+</body>
+</html>

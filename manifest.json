@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Mindful Access Bandit",
+  "version": "0.1.0",
+  "description": "A contextual bandit (LinUCB) decides whether to grant time-limited access to sites you choose to restrict, learning from how long you actually stay.",
+  "permissions": ["storage", "alarms", "tabs", "declarativeNetRequest", "scripting"],
+  "optional_host_permissions": ["*://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Mindful Access"
+  },
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["blocked.html", "blocked.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

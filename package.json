@@ -1,0 +1,14 @@
+{
+  "name": "mindful-access-bandit",
+  "version": "0.1.0",
+  "description": "A Manifest V3 browser extension that uses a contextual bandit (LinUCB) to decide whether to grant time-limited access to sites you choose to restrict, learning from how long you actually stay.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

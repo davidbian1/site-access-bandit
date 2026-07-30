@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Access limited</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Arial, sans-serif;
+    background: #14161a;
+    color: #e8e8ec;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+  }
+  .card {
+    max-width: 420px;
+    padding: 32px;
+    border-radius: 12px;
+    background: #1e2126;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+    text-align: center;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  .site { color: #8ab4f8; font-weight: 600; }
+  p { color: #a9adb4; font-size: 14px; line-height: 1.5; }
+  button {
+    margin-top: 16px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    background: #8ab4f8;
+    color: #14161a;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .secondary {
+    position: relative;
+    overflow: hidden;
+    background: transparent;
+    color: #a9adb4;
+    border: 1px solid #333844;
+    margin-left: 8px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .secondary .hold-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    background: rgba(242, 139, 130, 0.35);
+    transition: width linear;
+    z-index: 0;
+  }
+  .secondary.holding .hold-fill { width: 100%; }
+  .secondary .label { position: relative; z-index: 1; }
+  #status { margin-top: 14px; font-size: 13px; min-height: 18px; }
+  #overrideBtn { display: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Access to <span class="site" id="site"></span> is currently limited</h1>
+    <p>A local bandit model decides whether to grant brief, time-limited access based on the time of day and your recent usage of this site.</p>
+    <button id="requestBtn">Request access</button>
+    <button id="overrideBtn" class="secondary">
+      <span class="hold-fill"></span>
+      <span class="label">I really need this</span>
+    </button>
+    <div id="status"></div>
+  </div>
+  <script src="blocked.js"></script>
+</body>
+</html>

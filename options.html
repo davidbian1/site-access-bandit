@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Mindful Access — Settings</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Arial, sans-serif;
+    max-width: 780px;
+    margin: 32px auto;
+    background: #14161a;
+    color: #e8e8ec;
+    padding: 0 16px;
+  }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 32px; border-bottom: 1px solid #262a31; padding-bottom: 6px; }
+  section { margin-bottom: 24px; }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; color: #a9adb4; }
+  input[type=number], input[type=text] {
+    background: #1e2126; border: 1px solid #333844; color: #e8e8ec; border-radius: 6px; padding: 6px 8px; width: 160px;
+  }
+  button {
+    border: none; border-radius: 6px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; margin-right: 8px; margin-top: 10px;
+  }
+  .primary { background: #8ab4f8; color: #14161a; }
+  .danger { background: #3a2020; color: #f28b82; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #262a31; }
+  th { color: #8b8f98; font-weight: 600; }
+  .muted { color: #8b8f98; font-size: 12px; }
+  .add-row { display: flex; gap: 8px; align-items: flex-end; }
+  #saveStatus { display: inline-block; margin-left: 10px; font-size: 12px; color: #8ab4f8; }
+</style>
+</head>
+<body>
+  <h1>Mindful Access — Settings</h1>
+
+  <section>
+    <h2>Managed sites</h2>
+    <div class="add-row">
+      <div>
+        <label for="newSite">Hostname (e.g. reddit.com)</label>
+        <input type="text" id="newSite" placeholder="example.com" />
+      </div>
+      <button class="primary" id="addSiteBtn">Add site</button>
+    </div>
+    <table id="sitesTable">
+      <thead><tr><th>Site</th><th>Added</th><th></th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Bandit &amp; reward parameters</h2>
+    <label for="alpha">Exploration coefficient (alpha)</label>
+    <input type="number" id="alpha" step="0.05" min="0" />
+
+    <label for="armDurations">Arm durations, minutes, comma-separated (0 = deny)</label>
+    <input type="text" id="armDurations" />
+
+    <label for="penaltyPerMinute">Penalty per active minute</label>
+    <input type="number" id="penaltyPerMinute" step="0.001" min="0" />
+
+    <label for="denyReward">Deny reward — the reward for a denial that stands (not accessing is the rewarded outcome)</label>
+    <input type="number" id="denyReward" step="0.01" min="0" />
+
+    <label for="overrideSessionPenalty">Override session penalty — extra flat penalty on a session that only happened via override</label>
+    <input type="number" id="overrideSessionPenalty" step="0.05" min="0" />
+
+    <label for="frequencyWindowMin">Frequency window (minutes) — repeat visits within this window count against you</label>
+    <input type="number" id="frequencyWindowMin" step="1" min="0" />
+
+    <label for="frequencyPenaltyPerSession">Frequency penalty per repeat visit in that window</label>
+    <input type="number" id="frequencyPenaltyPerSession" step="0.01" min="0" />
+
+    <label for="maxFrequencyPenalty">Max frequency penalty</label>
+    <input type="number" id="maxFrequencyPenalty" step="0.05" min="0" />
+
+    <label for="denyOverridePenalty">Deny-override penalty — fed back when you click "I really need this" on a denial</label>
+    <input type="number" id="denyOverridePenalty" step="0.05" min="0" />
+
+    <label for="overrideWindowMin">Override lookback window (minutes) — recent overrides within this count against you</label>
+    <input type="number" id="overrideWindowMin" step="1" min="0" />
+
+    <label for="overrideBaseDelaySec">Override wait floor (seconds) — minimum time before the override button is enabled</label>
+    <input type="number" id="overrideBaseDelaySec" step="1" min="0" />
+
+    <label for="overrideDelayRampSec">Override wait ramp (extra seconds per recent override)</label>
+    <input type="number" id="overrideDelayRampSec" step="1" min="0" />
+
+    <label for="overrideMaxDelaySec">Override wait ceiling (seconds)</label>
+    <input type="number" id="overrideMaxDelaySec" step="1" min="0" />
+
+    <label for="overrideHoldMs">Override hold duration (milliseconds) — how long you must press and hold once enabled</label>
+    <input type="number" id="overrideHoldMs" step="100" min="0" />
+
+    <label for="overrideEffortDiscountSec">Override effort discount (seconds shaved off per consecutive genuine denial on this site)</label>
+    <input type="number" id="overrideEffortDiscountSec" step="1" min="0" />
+
+    <label for="overrideGraceMin">Override grace window (minutes) — per-navigation re-gating is suspended for this long after a successful override</label>
+    <input type="number" id="overrideGraceMin" step="1" min="0" />
+
+    <label for="trustHalfLifeMin">Trust half-life (minutes) — how fast earned trust decays back toward 0</label>
+    <input type="number" id="trustHalfLifeMin" step="5" min="1" />
+
+    <label for="trustOverrideBoost">Trust boost per override (0-1)</label>
+    <input type="number" id="trustOverrideBoost" step="0.05" min="0" max="1" />
+
+    <label for="trustMaxDiscount">Trust max discount (0-1) — cooldown/override-wait reduction at full trust</label>
+    <input type="number" id="trustMaxDiscount" step="0.05" min="0" max="1" />
+
+    <label for="longFormDwellMin">Long-form dwell threshold (minutes) — dwelling this long on a page skips re-gating the next navigation, and skips a hard cutoff on grant expiry if you're still watching</label>
+    <input type="number" id="longFormDwellMin" step="1" min="1" />
+
+    <label for="longFormGraceMin">Long-form grace window (minutes) — banked (like an override) after a qualifying long-form session</label>
+    <input type="number" id="longFormGraceMin" step="1" min="0" />
+
+    <label for="longFormTrustBoost">Long-form trust boost (0-1) — smaller than the override boost, since it's a passive signal</label>
+    <input type="number" id="longFormTrustBoost" step="0.05" min="0" max="1" />
+
+    <label for="minCooldownSec">Cooldown floor (seconds) — reached after brief recent sessions</label>
+    <input type="number" id="minCooldownSec" step="1" min="0" />
+
+    <label for="maxCooldownSec">Cooldown ceiling (seconds) — reached after long recent sessions</label>
+    <input type="number" id="maxCooldownSec" step="1" min="0" />
+
+    <label for="cooldownRampSecPerMin">Cooldown ramp (extra seconds per minute of recent avg active time)</label>
+    <input type="number" id="cooldownRampSecPerMin" step="0.5" min="0" />
+
+    <div>
+      <button class="primary" id="saveSettingsBtn">Save settings</button>
+      <span id="saveStatus"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bandit state (debug)</h2>
+    <div class="add-row">
+      <div>
+        <label for="debugSite">Site</label>
+        <input type="text" id="debugSite" placeholder="example.com" />
+      </div>
+      <button id="debugBtn">Show current arm scores</button>
+      <button class="danger" id="resetOneBtn">Reset this site's model</button>
+      <button class="danger" id="resetAllBtn">Reset all models</button>
+    </div>
+    <p class="muted" id="trustDisplay"></p>
+    <table id="debugTable">
+      <thead><tr><th>Arm (min)</th><th>Mean estimate</th><th>Uncertainty</th><th>UCB score</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Session history</h2>
+    <button class="danger" id="clearSessionsBtn">Clear history</button>
+    <table id="sessionsTable">
+      <thead><tr><th>Site</th><th>When</th><th>Decision</th><th>Granted (min)</th><th>Active (min)</th><th>Reward</th><th>Ended</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="options.js"></script>
+</body>
+</html>
