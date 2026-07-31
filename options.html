@@ -100,6 +100,9 @@
     <label for="overrideGraceMin">Override grace window (minutes) — per-navigation re-gating is suspended for this long after a successful override</label>
     <input type="number" id="overrideGraceMin" step="1" min="0" />
 
+    <label for="overrideGraceHopCount">Override grace hop count — navigations the override grace covers (generous by default, so it feels like free browsing)</label>
+    <input type="number" id="overrideGraceHopCount" step="1" min="1" />
+
     <label for="trustHalfLifeMin">Trust half-life (minutes) — how fast earned trust decays back toward 0</label>
     <input type="number" id="trustHalfLifeMin" step="5" min="1" />
 
@@ -109,14 +112,23 @@
     <label for="trustMaxDiscount">Trust max discount (0-1) — cooldown/override-wait reduction at full trust</label>
     <input type="number" id="trustMaxDiscount" step="0.05" min="0" max="1" />
 
-    <label for="longFormDwellMin">Long-form dwell threshold (minutes) — dwelling this long on a page skips re-gating the next navigation, and skips a hard cutoff on grant expiry if you're still watching</label>
+    <label for="longFormDwellMin">Long-form dwell threshold (minutes) — this long staying on the same page skips a hard cutoff on grant expiry if you're still watching (does not affect navigating to a new URL)</label>
     <input type="number" id="longFormDwellMin" step="1" min="1" />
 
-    <label for="longFormGraceMin">Long-form grace window (minutes) — banked (like an override) after a qualifying long-form session</label>
-    <input type="number" id="longFormGraceMin" step="1" min="0" />
+    <label for="extremeLongFormMin">Extreme long-form threshold (minutes) — a session this long makes you eligible to spend effort extending past the per-navigation gate</label>
+    <input type="number" id="extremeLongFormMin" step="1" min="1" />
 
-    <label for="longFormTrustBoost">Long-form trust boost (0-1) — smaller than the override boost, since it's a passive signal</label>
-    <input type="number" id="longFormTrustBoost" step="0.05" min="0" max="1" />
+    <label for="extendOfferWindowMin">Extend offer window (minutes) — how long the blocked page offers "Continue watching" before the offer lapses</label>
+    <input type="number" id="extendOfferWindowMin" step="1" min="0" />
+
+    <label for="extendGraceMin">Extend grace window (minutes)</label>
+    <input type="number" id="extendGraceMin" step="1" min="0" />
+
+    <label for="extendHopCount">Extend hop count — navigations the extend grace covers (small by default, unlike override's)</label>
+    <input type="number" id="extendHopCount" step="1" min="1" />
+
+    <label for="extendGrantMin">Extend grant duration (minutes) — length of the grant created for the page you extend into</label>
+    <input type="number" id="extendGrantMin" step="1" min="1" />
 
     <label for="minCooldownSec">Cooldown floor (seconds) — reached after brief recent sessions</label>
     <input type="number" id="minCooldownSec" step="1" min="0" />

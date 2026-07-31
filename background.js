@@ -11,6 +11,7 @@ import {
   recentDenyStreak,
   decayedTrust,
   applyTrustDiscount,
+  consumeGrace,
 } from './lib/config.js';
 
 const TICK_ALARM = 'tick';
@@ -26,6 +27,7 @@ async function getStore() {
     'grants',
     'grace',
     'trust',
+    'extendEligible',
     'ruleIds',
     'lastRequestAt',
     'nextRuleId',
@@ -38,6 +40,7 @@ async function getStore() {
     grants: data.grants || {},
     grace: data.grace || {},
     trust: data.trust || {},
+    extendEligible: data.extendEligible || {},
     ruleIds: data.ruleIds || {},
     lastRequestAt: data.lastRequestAt || {},
     nextRuleId: data.nextRuleId || 1,
@@ -289,24 +292,25 @@ async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}
 
   delete store.grants[hostname];
 
-  // A qualifying long-form session is a real engagement signal, same spirit
-  // as an override — bank the same grace/trust credit (smaller, since it's
-  // passive rather than a deliberate costly action) so it buys more than
-  // just the one dwell-based pass-through content.js already grants: some
-  // slack for what you click next too, not just what you just watched.
+  // Per-navigation gating is the default with no automatic exceptions — but
+  // a session this long is a strong enough signal to at least offer a way
+  // out: for a short window, the blocked page will show an "extend" option
+  // that costs the same wait-and-hold effort an override does. It's an
+  // offer, not a grant — nothing changes until EXTEND_SESSION is actually
+  // used.
   const now = Date.now();
-  if (!grant.overridden && activeMinutes >= store.settings.longFormDwellMin) {
-    store.grace[hostname] = Math.max(store.grace[hostname] || 0, now + store.settings.longFormGraceMin * 60 * 1000);
-    const priorTrust = trustFor(store, hostname, now);
-    store.trust[hostname] = { value: Math.min(1, priorTrust + store.settings.longFormTrustBoost), updatedAt: now };
+  if (!grant.overridden && !grant.extended && activeMinutes >= store.settings.extremeLongFormMin) {
+    store.extendEligible[hostname] = {
+      context: grant.context,
+      expiresAt: now + store.settings.extendOfferWindowMin * 60 * 1000,
+    };
   }
 
   await setStore({
     banditState: store.banditState,
     sessions: store.sessions,
     grants: store.grants,
-    grace: store.grace,
-    trust: store.trust,
+    extendEligible: store.extendEligible,
   });
   await chrome.alarms.clear(`expire:${hostname}`);
   await rebuildBlockRules();
@@ -516,8 +520,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         // The effort of getting through the wait and the hold should buy more
         // than the one page it was spent on — suspend per-navigation
-        // re-gating on this site for a grace window afterward.
-        store.grace[hostname] = now + store.settings.overrideGraceMin * 60 * 1000;
+        // re-gating on this site for a grace window afterward. The hop count
+        // is generous enough that this behaves like free browsing for the
+        // window's duration in practice (see consumeGrace).
+        store.grace[hostname] = { expiresAt: now + store.settings.overrideGraceMin * 60 * 1000, hopsRemaining: store.settings.overrideGraceHopCount };
 
         // Bank trust credit too, so near-future access on this site stays
         // easier for a while after the grace window itself lapses — decaying
@@ -540,6 +546,52 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ granted: true, durationMin, targetUrl: store.grants[hostname].targetUrl, overridden: true });
         break;
       }
+      case 'EXTEND_SESSION': {
+        const store = await getStore();
+        const hostname = msg.hostname;
+        const now = Date.now();
+        const eligible = store.extendEligible[hostname];
+
+        if (!eligible || now >= eligible.expiresAt) {
+          sendResponse({ ok: false, error: 'no extend offer available' });
+          break;
+        }
+        delete store.extendEligible[hostname];
+
+        // Reuses the largest configured arm so the bandit still learns from
+        // this session like any other grant — extending isn't correcting a
+        // wrong decision the way an override is, so it doesn't carry the
+        // extra overrideSessionPenalty; the duration penalty on a
+        // deliberately long grant already reflects its cost.
+        const armIndex = store.settings.armDurationsMin.length - 1;
+        const durationMin = store.settings.extendGrantMin;
+        store.grants[hostname] = makeGrant(armIndex, durationMin, eligible.context, now, msg.targetUrl, { extended: true });
+
+        // The point of spending the effort: skip the redirect that's about
+        // to happen. The credit is deliberately scarce — a handful of hops
+        // at most, diminishing with every one spent (see consumeGrace) —
+        // unlike override's grace, which is generous enough to feel like
+        // free browsing.
+        store.grace[hostname] = {
+          expiresAt: now + store.settings.extendGraceMin * 60 * 1000,
+          hopsRemaining: store.settings.extendHopCount,
+        };
+
+        await setStore({ grants: store.grants, grace: store.grace, extendEligible: store.extendEligible });
+        await rebuildBlockRules();
+        await ensureTickAlarm();
+        chrome.alarms.create(`expire:${hostname}`, { when: store.grants[hostname].expiresAt });
+
+        sendResponse({ granted: true, durationMin, targetUrl: msg.targetUrl });
+        break;
+      }
+      case 'GET_EXTEND_ELIGIBILITY': {
+        const store = await getStore();
+        const eligible = store.extendEligible[msg.hostname];
+        const now = Date.now();
+        sendResponse({ eligible: !!(eligible && now < eligible.expiresAt), holdMs: store.settings.overrideHoldMs });
+        break;
+      }
       case 'ADD_SITE': {
         const store = await getStore();
         if (!store.sites.some((s) => s.hostname === msg.hostname)) {
@@ -558,7 +610,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         delete store.grants[msg.hostname];
         delete store.grace[msg.hostname];
         delete store.trust[msg.hostname];
-        await setStore({ sites: store.sites, grants: store.grants, grace: store.grace, trust: store.trust });
+        delete store.extendEligible[msg.hostname];
+        await setStore({
+          sites: store.sites,
+          grants: store.grants,
+          grace: store.grace,
+          trust: store.trust,
+          extendEligible: store.extendEligible,
+        });
         await chrome.alarms.clear(`expire:${msg.hostname}`);
         await rebuildBlockRules();
         await rebuildContentScripts();
@@ -569,20 +628,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const store = await getStore();
         const now = Date.now();
         const hasGrant = !!store.grants[msg.hostname];
-        const inGrace = now < (store.grace[msg.hostname] || 0);
-        // dwellMs, if provided, is how long content.js measured you staying
-        // on the page you're navigating away from — long enough and this
-        // navigation is treated like a grace-covered one, so a genuinely
-        // long-form video doesn't re-trigger the gate on "what's next" the
-        // way a string of short clips still does.
-        const longFormDwell = typeof msg.dwellMs === 'number' && msg.dwellMs >= store.settings.longFormDwellMin * 60000;
+        let inGrace;
+        if (msg.consume) {
+          // A navigation is actually about to spend the credit — decrement
+          // it (see consumeGrace) rather than just checking it, so a grace
+          // window can't be stretched across more hops than it was earned for.
+          const result = consumeGrace(store.grace[msg.hostname], now);
+          inGrace = result.allowed;
+          if (result.allowed) {
+            if (result.next) store.grace[msg.hostname] = result.next;
+            else delete store.grace[msg.hostname];
+            await setStore({ grace: store.grace });
+          }
+        } else {
+          // Non-destructive peek (e.g. initial page load) — don't spend a hop
+          // just for checking whether the page should load at all.
+          const entry = store.grace[msg.hostname];
+          inGrace = !!(entry && now < entry.expiresAt && entry.hopsRemaining > 0);
+        }
         // `granted` covers a normal page-level grant OR an active grace
-        // window — either lets a freshly loaded page through. `grace` and
-        // `longFormDwell` are reported separately: only those two should
-        // suspend per-navigation re-gating on the *next* click; a plain
-        // grant existing shouldn't, since every new navigation is still
-        // meant to need its own decision outside of those cases.
-        sendResponse({ granted: hasGrant || inGrace, grace: inGrace, longFormDwell });
+        // credit — either lets a freshly loaded page through. `grace` is
+        // reported separately: only it should suspend per-navigation
+        // re-gating on the *next* click; a plain grant existing shouldn't,
+        // since every new navigation still needs its own decision by default.
+        sendResponse({ granted: hasGrant || inGrace, grace: inGrace });
         break;
       }
       case 'GET_STATUS': {

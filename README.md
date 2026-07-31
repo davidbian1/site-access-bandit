@@ -28,16 +28,18 @@ brief, time-limited access — and learns from what you actually do with it.
 4. While access is granted, a periodic alarm samples whether that site's tab
    is the active, focused tab and accumulates active seconds — this is the
    **actual usage**, not just the allotted ceiling.
-5. **A grant only ever covers the one page you requested it for** — with one
-   exception (point 9). A content script on every managed site intercepts
-   its client-side routing (`pushState`/`replaceState`/`popstate` — how sites
-   like video or feed sites move between videos/posts without a full page
-   load, which network-level blocking can't see) and, the moment you
-   navigate to anything else, ends the current grant right there and sends
-   you back to the blocked page for the new destination. Every new
+5. **A grant only ever covers the one page you requested it for, by default,
+   with no automatic exceptions.** A content script on every managed site
+   intercepts its client-side routing (`pushState`/`replaceState`/`popstate`
+   — how sites like video or feed sites move between videos/posts without a
+   full page load, which network-level blocking can't see) and, the moment
+   you navigate to anything else, ends the current grant right there and
+   sends you back to the blocked page for the new destination. Every new
    video/article/whatever gets its own fresh bandit decision, built from the
    latest context — there's no free-roam window covering whatever you click
-   next just because the previous grant hadn't expired yet.
+   next just because the previous grant hadn't expired yet. The only thing
+   that suspends this is a **grace credit** — never earned automatically,
+   only by spending real effort (points 7 and 9, below).
 6. When a grant ends (you navigated away, the timer ran out, or you ended it
    early), the session is finalized: a reward — never positive, see below —
    is computed from actual active minutes on that one page and fed back into
@@ -76,13 +78,18 @@ brief, time-limited access — and learns from what you actually do with it.
 
    That effort should buy you something beyond the one page, though —
    otherwise the very next click just re-triggers the whole gate and the
-   wait/hold was pointless. A successful override opens a grace window
-   (`overrideGraceMin`, default 5 min) during which per-navigation re-gating
-   (point 5, above) is suspended on that site: you can click through to other
-   videos/pages without each one re-triggering the blocked page. It's still
-   bounded — the underlying grant's own timer, and the tab-kickout from point
-   5's expiry handling, both still apply — grace only suspends the *extra*
-   per-click gate, not the overall time ceiling.
+   wait/hold was pointless. A successful override banks a grace credit
+   (`overrideGraceMin`, default 5 min window; `overrideGraceHopCount`,
+   default 50 navigations) during which per-navigation re-gating (point 5,
+   above) is suspended on that site: you can click through to other
+   videos/pages without each one re-triggering the blocked page. The hop
+   count is generous enough that in practice this feels like free browsing
+   for the window's duration — it's still bounded, though: the underlying
+   grant's own timer, and the tab-kickout from point 5's expiry handling,
+   both still apply, and every hop spent shrinks the remaining window (see
+   `consumeGrace` in `lib/config.js` — each use halves whatever time was
+   left, on top of decrementing the hop count), so it can't be stretched
+   past what it was actually earned for.
 8. **That effort shouldn't evaporate the instant grace lapses, either.** Each
    site keeps a small decaying "trust" credit (0 to 1) in `chrome.storage.local`,
    bumped up by `trustOverrideBoost` (default 0.6, capped at 1) whenever you
@@ -95,36 +102,36 @@ brief, time-limited access — and learns from what you actually do with it.
    fading smoothly rather than snapping back the moment the grace window
    ends. Current trust for a site is visible in the bandit-state debug panel
    on the options page.
-9. **Every navigation needing its own decision, and a grant cutting off the
-   instant its timer hits zero, both treat a 40-minute documentary the same
-   as a string of 15-second clips — but sustained, uninterrupted dwell time
-   on one page is itself a signal this probably isn't compulsive scrolling.**
-   `longFormDwellMin` (default 8 min) is used in two places:
-   - **Per-navigation:** if you dwelled on the page you're leaving at least
-     this long, the content script lets the next navigation through without
-     re-triggering the gate (the same pass-through mechanism grace uses,
-     point 7) — one long video into a related long video doesn't interrupt,
-     while a rapid string of shorts still does, since none of them individually
-     clear the threshold.
-   - **On grant expiry:** if the tab is still active and focused on the site
-     when a grant's timer runs out, and you'd already been engaged at least
-     `longFormDwellMin`, the extension doesn't hard-cut you — it finalizes
-     that session normally (reward included) and silently asks the bandit
-     again with the now-current context, extending the grant if it still
-     says yes. It isn't a free pass: heavier recent usage by that point may
-     well tip the fresh decision toward denying, and then you do get kicked
-     to the blocked page — it's just not an *unconditional* cutoff at the
-     fixed timer mark the way it is for anyone who hasn't shown that kind of
-     sustained engagement.
-
-   The per-navigation pass-through only judges the one hop, though: a long
-   video followed by a short glance still gates the click after *that*. So a
-   qualifying long-form session also banks the same grace/trust credit an
-   override does (points 7-8) — `longFormGraceMin` (default 10 min) and
-   `longFormTrustBoost` (default 0.35, smaller than the override's 0.6 since
-   this is a passive signal, not a deliberate costly action). One genuinely
-   engaging video buys some slack for what you click next too, not just a
-   single hop's exemption.
+9. **Staying on one page past its timer and navigating to a new page are
+   different questions, and get answered differently.** `longFormDwellMin`
+   (default 8 min) governs only the first, automatically: if the tab is
+   still active and focused on the site when a grant's timer runs out, and
+   you'd already been engaged at least `longFormDwellMin`, the extension
+   doesn't hard-cut you — it finalizes that session normally (reward
+   included) and silently asks the bandit again with the now-current
+   context, extending the grant if it still says yes. It isn't a free pass:
+   heavier recent usage by that point may well tip the fresh decision toward
+   denying, and then you do get kicked to the blocked page — it's just not
+   an *unconditional* cutoff at the fixed timer mark the way it is for
+   anyone who hasn't shown that kind of sustained engagement. This is the
+   only automatic, effort-free exception anywhere in the system, and it's
+   deliberately narrow: it only ever applies to staying on the *same* page,
+   never to what you navigate to next.
+10. **Navigating to a new page always hits the gate, full stop — with one
+    door left open for effort.** If a session you're navigating away from
+    turns out to have run *extremely* long (`extremeLongFormMin`, default
+    45 min — well past `longFormDwellMin`), the blocked page you land on
+    offers a distinct "Continue watching" option for a short window
+    (`extendOfferWindowMin`, default 2 min) before the offer lapses. Using
+    it costs the same press-and-hold effort the override button does (no
+    separate wait this time — the short offer window is the friction), and
+    unlike override's grace, what it buys is deliberately scarce:
+    `extendGraceMin` (default 15 min) bounded to just `extendHopCount`
+    navigations (default **1**) before the credit is spent, diminishing via
+    the same `consumeGrace` halving described in point 7. So one genuinely
+    extreme session can buy you past exactly the next gate it would've
+    hit — not a standing exemption, and not automatic; you have to actually
+    reach for it every time.
 
 ## Reward function
 

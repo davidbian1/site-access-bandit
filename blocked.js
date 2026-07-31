@@ -5,17 +5,9 @@ const targetUrl = params.get('target') || `https://${hostname}/`;
 document.getElementById('site').textContent = hostname;
 
 const btn = document.getElementById('requestBtn');
-const overrideBtn = document.getElementById('overrideBtn');
-const overrideLabel = overrideBtn.querySelector('.label');
-const overrideFill = overrideBtn.querySelector('.hold-fill');
 const status = document.getElementById('status');
 
 let countdownTimer = null;
-let overrideDelayTimer = null;
-let holdTimer = null;
-let holding = false;
-let holdMs = 3000;
-let overriding = false;
 
 function goToTarget() {
   setTimeout(() => {
@@ -38,12 +30,107 @@ function startCooldownCountdown(retryAtMs) {
   }, 250);
 }
 
+// Shared press-and-hold interaction: a button that requires a sustained hold
+// (not a click) to fire, with a visible fill animation, so it can't be
+// tapped through on reflex. Used for both the override and extend buttons.
+function makeHoldButton(el, { label, onFire }) {
+  const fill = el.querySelector('.hold-fill');
+  const labelEl = el.querySelector('.label');
+  let holdMs = 3000;
+  let holdTimer = null;
+  let holding = false;
+  let firing = false;
+
+  function setLabel(text) {
+    labelEl.textContent = text;
+  }
+
+  function cancelHold() {
+    if (!holding) return;
+    holding = false;
+    clearTimeout(holdTimer);
+    el.classList.remove('holding');
+  }
+
+  function startHold() {
+    if (el.disabled || firing) return;
+    holding = true;
+    el.classList.add('holding');
+    fill.style.transitionDuration = `${holdMs}ms`;
+    holdTimer = setTimeout(() => {
+      if (holding) fire();
+    }, holdMs);
+  }
+
+  async function fire() {
+    if (firing) return;
+    firing = true;
+    el.disabled = true;
+    await onFire();
+    firing = false;
+  }
+
+  el.addEventListener('mousedown', startHold);
+  el.addEventListener('mouseup', cancelHold);
+  el.addEventListener('mouseleave', cancelHold);
+  el.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    startHold();
+  });
+  el.addEventListener('touchend', cancelHold);
+  el.addEventListener('touchcancel', cancelHold);
+
+  return {
+    show(readyLabel, holdMsFromServer) {
+      holdMs = holdMsFromServer || 3000;
+      el.style.display = 'inline-block';
+      el.disabled = false;
+      setLabel(readyLabel || `${label} (${Math.round(holdMs / 1000)}s)`);
+    },
+    hide() {
+      el.style.display = 'none';
+    },
+    disable() {
+      el.disabled = true;
+    },
+    enable() {
+      el.disabled = false;
+    },
+    setLabel,
+  };
+}
+
+// ---- override ("I really need this" after a denial) ----
+
+const overrideBtn = document.getElementById('overrideBtn');
+let overrideDelayTimer = null;
+
+const override = makeHoldButton(overrideBtn, {
+  label: 'Hold to override',
+  onFire: async () => {
+    btn.disabled = true;
+    clearInterval(overrideDelayTimer);
+    status.textContent = 'Overriding…';
+    const response = await chrome.runtime.sendMessage({ type: 'OVERRIDE_DENY', hostname, targetUrl });
+
+    if (response.granted) {
+      status.textContent = `Granted for ${response.durationMin} minute${response.durationMin === 1 ? '' : 's'} — redirecting…`;
+      override.hide();
+      goToTarget();
+      return;
+    }
+
+    status.textContent = "Couldn't override — try Request access again.";
+    btn.disabled = false;
+    override.enable();
+  },
+});
+
 // The override button doesn't just work on a tap: it stays disabled behind a
 // wait (longer the more you've already leaned on it for this site), then
-// needs a sustained press-and-hold rather than a click, so reaching for it
-// takes deliberate, sustained effort rather than reflex.
-function armOverrideButton(delaySec, holdMsFromServer) {
-  holdMs = holdMsFromServer || 3000;
+// needs the sustained hold above, so reaching for it takes deliberate,
+// sustained effort rather than reflex.
+function armOverrideButton(delaySec, holdMs) {
   overrideBtn.style.display = 'inline-block';
   overrideBtn.disabled = true;
   clearInterval(overrideDelayTimer);
@@ -52,80 +139,22 @@ function armOverrideButton(delaySec, holdMsFromServer) {
   const tick = () => {
     if (remaining <= 0) {
       clearInterval(overrideDelayTimer);
-      overrideBtn.disabled = false;
-      overrideLabel.textContent = `Hold to override (${Math.round(holdMs / 1000)}s)`;
+      override.show(`Hold to override (${Math.round((holdMs || 3000) / 1000)}s)`, holdMs);
       return;
     }
-    overrideLabel.textContent = `I really need this (available in ${remaining}s)`;
+    override.setLabel(`I really need this (available in ${remaining}s)`);
     remaining -= 1;
   };
   tick();
   overrideDelayTimer = setInterval(tick, 1000);
 }
 
-function cancelHold() {
-  if (!holding) return;
-  holding = false;
-  clearTimeout(holdTimer);
-  overrideBtn.classList.remove('holding');
-}
-
-async function completeOverride() {
-  if (overriding) return;
-  overriding = true;
-  btn.disabled = true;
-  overrideBtn.disabled = true;
-  clearInterval(overrideDelayTimer);
-  status.textContent = 'Overriding…';
-  const response = await chrome.runtime.sendMessage({
-    type: 'OVERRIDE_DENY',
-    hostname,
-    targetUrl,
-  });
-
-  if (response.granted) {
-    status.textContent = `Granted for ${response.durationMin} minute${response.durationMin === 1 ? '' : 's'} — redirecting…`;
-    overrideBtn.style.display = 'none';
-    goToTarget();
-    return;
-  }
-
-  overriding = false;
-  status.textContent = "Couldn't override — try Request access again.";
-  btn.disabled = false;
-  overrideBtn.disabled = false;
-}
-
-function startHold() {
-  if (overrideBtn.disabled || overriding) return;
-  holding = true;
-  overrideBtn.classList.add('holding');
-  overrideFill.style.transitionDuration = `${holdMs}ms`;
-  holdTimer = setTimeout(() => {
-    if (holding) completeOverride();
-  }, holdMs);
-}
-
-overrideBtn.addEventListener('mousedown', startHold);
-overrideBtn.addEventListener('mouseup', cancelHold);
-overrideBtn.addEventListener('mouseleave', cancelHold);
-overrideBtn.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  startHold();
-});
-overrideBtn.addEventListener('touchend', cancelHold);
-overrideBtn.addEventListener('touchcancel', cancelHold);
-
 btn.addEventListener('click', async () => {
   btn.disabled = true;
-  overrideBtn.style.display = 'none';
+  override.hide();
   clearInterval(overrideDelayTimer);
   status.textContent = 'Thinking…';
-  const response = await chrome.runtime.sendMessage({
-    type: 'REQUEST_ACCESS',
-    hostname,
-    targetUrl,
-  });
+  const response = await chrome.runtime.sendMessage({ type: 'REQUEST_ACCESS', hostname, targetUrl });
 
   if (response.granted) {
     status.textContent = `Granted for ${response.durationMin} minute${response.durationMin === 1 ? '' : 's'} — redirecting…`;
@@ -142,3 +171,30 @@ btn.addEventListener('click', async () => {
   btn.disabled = false;
   armOverrideButton(response.overrideDelaySec, response.overrideHoldMs);
 });
+
+// ---- extend ("Continue watching" after an extremely long session ended) ----
+
+const extendBtn = document.getElementById('extendBtn');
+const extend = makeHoldButton(extendBtn, {
+  label: 'Hold to continue',
+  onFire: async () => {
+    status.textContent = 'Continuing…';
+    const response = await chrome.runtime.sendMessage({ type: 'EXTEND_SESSION', hostname, targetUrl });
+
+    if (response.granted) {
+      status.textContent = `Continuing for ${response.durationMin} minutes — redirecting…`;
+      extend.hide();
+      override.hide();
+      clearInterval(overrideDelayTimer);
+      goToTarget();
+      return;
+    }
+
+    extend.hide();
+  },
+});
+
+(async () => {
+  const { eligible, holdMs } = await chrome.runtime.sendMessage({ type: 'GET_EXTEND_ELIGIBILITY', hostname });
+  if (eligible) extend.show(undefined, holdMs);
+})();

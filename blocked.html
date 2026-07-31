@@ -59,8 +59,9 @@
   }
   .secondary.holding .hold-fill { width: 100%; }
   .secondary .label { position: relative; z-index: 1; }
+  .extend .hold-fill { background: rgba(138, 180, 248, 0.35); }
   #status { margin-top: 14px; font-size: 13px; min-height: 18px; }
-  #overrideBtn { display: none; }
+  #overrideBtn, #extendBtn { display: none; }
 </style>
 </head>
 <body>
@@ -71,6 +72,10 @@
     <button id="overrideBtn" class="secondary">
       <span class="hold-fill"></span>
       <span class="label">I really need this</span>
+    </button>
+    <button id="extendBtn" class="secondary extend">
+      <span class="hold-fill"></span>
+      <span class="label">Continue watching</span>
     </button>
     <div id="status"></div>
   </div>

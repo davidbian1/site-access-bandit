@@ -2,17 +2,12 @@
 // covers the one page it was requested for — the moment the page navigates
 // to anything else, this ends that grant and sends the tab back through the
 // blocked page so the next destination gets its own fresh bandit decision.
-// Two exceptions, both meant to avoid interrupting more than the point of
-// gating actually requires:
-//  - right after a successful override, there's a grace window (see
-//    background.js's OVERRIDE_DENY handler) where this re-gating is
-//    suspended, so the effort spent getting through the override actually
-//    buys some real browsing instead of ending on the very next click.
-//  - if you dwelled on the page you're leaving long enough to look like
-//    genuine long-form viewing rather than compulsive scrolling (see
-//    background.js's longFormDwellMin), the next navigation is let through
-//    too — a 40-minute documentary followed by a related video shouldn't be
-//    gated the same way a string of 15-second clips is.
+// That's the default for every navigation, with exactly one exception: an
+// active grace credit (see background.js's consumeGrace) — banked either by
+// a successful override, or by spending the same wait-and-hold effort to
+// "extend" an extremely long session (see blocked.js) — lets a navigation
+// through without re-gating. Each use spends one hop of that credit; there
+// is no automatic, effort-free pass-through.
 //
 // Real navigation-call detection happens in content-main.js, which runs in
 // the page's own MAIN world (isolated-world overrides of history.pushState/
@@ -23,7 +18,6 @@
 (function () {
   let redirecting = false;
   let lastUrl = location.href;
-  let pageEnteredAt = Date.now();
 
   function currentHostname() {
     return location.hostname.replace(/^www\./, '');
@@ -45,13 +39,9 @@
   async function handleNavigate(url) {
     if (redirecting || !url || url === lastUrl) return;
     lastUrl = url;
-    const dwellMs = Date.now() - pageEnteredAt;
     try {
-      const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname(), dwellMs });
-      if (status && (status.grace || status.longFormDwell)) {
-        pageEnteredAt = Date.now(); // let it through, but the clock resets for the new page
-        return;
-      }
+      const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname(), consume: true });
+      if (status && status.grace) return; // spent a hop of banked grace — let it through
     } catch {
       // extension context invalidated — fall through to re-gating below
     }
@@ -65,9 +55,8 @@
   // history.pushState/replaceState/popstate at all.
   setInterval(() => handleNavigate(location.href), 300);
 
-  // Initial load: confirm there's actually a live grant covering this exact
-  // page (guards against edge cases where a page loaded without going
-  // through the normal blocked-page -> request-access flow).
+  // Initial load: confirm there's actually a live grant (or grace credit)
+  // covering this exact page. Non-consuming — just a peek, not a hop spend.
   (async () => {
     try {
       const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname() });

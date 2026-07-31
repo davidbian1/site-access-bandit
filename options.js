@@ -59,12 +59,16 @@ async function loadSettings() {
   document.getElementById('overrideHoldMs').value = settings.overrideHoldMs;
   document.getElementById('overrideEffortDiscountSec').value = settings.overrideEffortDiscountSec;
   document.getElementById('overrideGraceMin').value = settings.overrideGraceMin;
+  document.getElementById('overrideGraceHopCount').value = settings.overrideGraceHopCount;
   document.getElementById('trustHalfLifeMin').value = settings.trustHalfLifeMin;
   document.getElementById('trustOverrideBoost').value = settings.trustOverrideBoost;
   document.getElementById('trustMaxDiscount').value = settings.trustMaxDiscount;
   document.getElementById('longFormDwellMin').value = settings.longFormDwellMin;
-  document.getElementById('longFormGraceMin').value = settings.longFormGraceMin;
-  document.getElementById('longFormTrustBoost').value = settings.longFormTrustBoost;
+  document.getElementById('extremeLongFormMin').value = settings.extremeLongFormMin;
+  document.getElementById('extendOfferWindowMin').value = settings.extendOfferWindowMin;
+  document.getElementById('extendGraceMin').value = settings.extendGraceMin;
+  document.getElementById('extendHopCount').value = settings.extendHopCount;
+  document.getElementById('extendGrantMin').value = settings.extendGrantMin;
   document.getElementById('minCooldownSec').value = settings.minCooldownSec;
   document.getElementById('maxCooldownSec').value = settings.maxCooldownSec;
   document.getElementById('cooldownRampSecPerMin').value = settings.cooldownRampSecPerMin;
@@ -94,12 +98,16 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
     overrideHoldMs: parseFloat(document.getElementById('overrideHoldMs').value),
     overrideEffortDiscountSec: parseFloat(document.getElementById('overrideEffortDiscountSec').value),
     overrideGraceMin: parseFloat(document.getElementById('overrideGraceMin').value),
+    overrideGraceHopCount: parseFloat(document.getElementById('overrideGraceHopCount').value),
     trustHalfLifeMin: parseFloat(document.getElementById('trustHalfLifeMin').value),
     trustOverrideBoost: parseFloat(document.getElementById('trustOverrideBoost').value),
     trustMaxDiscount: parseFloat(document.getElementById('trustMaxDiscount').value),
     longFormDwellMin: parseFloat(document.getElementById('longFormDwellMin').value),
-    longFormGraceMin: parseFloat(document.getElementById('longFormGraceMin').value),
-    longFormTrustBoost: parseFloat(document.getElementById('longFormTrustBoost').value),
+    extremeLongFormMin: parseFloat(document.getElementById('extremeLongFormMin').value),
+    extendOfferWindowMin: parseFloat(document.getElementById('extendOfferWindowMin').value),
+    extendGraceMin: parseFloat(document.getElementById('extendGraceMin').value),
+    extendHopCount: parseFloat(document.getElementById('extendHopCount').value),
+    extendGrantMin: parseFloat(document.getElementById('extendGrantMin').value),
     minCooldownSec: parseFloat(document.getElementById('minCooldownSec').value),
     maxCooldownSec: parseFloat(document.getElementById('maxCooldownSec').value),
     cooldownRampSecPerMin: parseFloat(document.getElementById('cooldownRampSecPerMin').value),
