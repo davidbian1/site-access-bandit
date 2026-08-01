@@ -402,7 +402,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ---- core decision logic -------------------------------------------------
 
-async function handleRequestAccess(hostname, targetUrl) {
+async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false } = {}) {
   const store = await getStore();
   const now = Date.now();
 
@@ -421,8 +421,8 @@ async function handleRequestAccess(hostname, targetUrl) {
   const cooldownSec = applyTrustDiscount(computeCooldownSec(recent.avgRecentActiveMin, store.settings), trust, store.settings);
   const cooldownMs = cooldownSec * 1000;
   const last = store.lastRequestAt[hostname] || 0;
-  if (now - last < cooldownMs) {
-    return { granted: false, cooldown: true, retryAtMs: last + cooldownMs };
+  if (!skipCooldown && now - last < cooldownMs) {
+    return { granted: false, cooldown: true, retryAtMs: last + cooldownMs, cooldownHoldMs: store.settings.overrideHoldMs };
   }
   store.lastRequestAt[hostname] = now;
 
@@ -481,6 +481,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     switch (msg.type) {
       case 'REQUEST_ACCESS': {
         const result = await handleRequestAccess(msg.hostname, msg.targetUrl);
+        sendResponse(result);
+        break;
+      }
+      case 'OVERRIDE_COOLDOWN': {
+        // The cooldown wait, not a denial, was the thing standing between
+        // you and asking — spending effort (a hold, no separate delay: the
+        // wait itself is exactly what this replaces) skips straight to a
+        // real, fair decision instead of leaving "disable the extension" as
+        // the only way around it. Still goes through the normal bandit
+        // decision — this doesn't guarantee access, just the chance to ask.
+        const result = await handleRequestAccess(msg.hostname, msg.targetUrl, { skipCooldown: true });
         sendResponse(result);
         break;
       }

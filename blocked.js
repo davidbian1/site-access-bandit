@@ -8,6 +8,7 @@ const btn = document.getElementById('requestBtn');
 const status = document.getElementById('status');
 
 let countdownTimer = null;
+let overrideDelayTimer = null;
 
 function goToTarget() {
   setTimeout(() => {
@@ -15,24 +16,9 @@ function goToTarget() {
   }, 600);
 }
 
-function startCooldownCountdown(retryAtMs) {
-  clearInterval(countdownTimer);
-  btn.disabled = true;
-  countdownTimer = setInterval(() => {
-    const remaining = Math.max(0, retryAtMs - Date.now());
-    if (remaining <= 0) {
-      clearInterval(countdownTimer);
-      btn.disabled = false;
-      status.textContent = '';
-      return;
-    }
-    status.textContent = `You just asked — try again in ${Math.ceil(remaining / 1000)}s`;
-  }, 250);
-}
-
 // Shared press-and-hold interaction: a button that requires a sustained hold
 // (not a click) to fire, with a visible fill animation, so it can't be
-// tapped through on reflex. Used for both the override and extend buttons.
+// tapped through on reflex. Used for override, extend, and skip-cooldown.
 function makeHoldButton(el, { label, onFire }) {
   const fill = el.querySelector('.hold-fill');
   const labelEl = el.querySelector('.label');
@@ -103,8 +89,6 @@ function makeHoldButton(el, { label, onFire }) {
 // ---- override ("I really need this" after a denial) ----
 
 const overrideBtn = document.getElementById('overrideBtn');
-let overrideDelayTimer = null;
-
 const override = makeHoldButton(overrideBtn, {
   label: 'Hold to override',
   onFire: async () => {
@@ -149,27 +133,69 @@ function armOverrideButton(delaySec, holdMs) {
   overrideDelayTimer = setInterval(tick, 1000);
 }
 
-btn.addEventListener('click', async () => {
-  btn.disabled = true;
-  override.hide();
-  clearInterval(overrideDelayTimer);
-  status.textContent = 'Thinking…';
-  const response = await chrome.runtime.sendMessage({ type: 'REQUEST_ACCESS', hostname, targetUrl });
+// ---- skip cooldown ("Ask now instead of waiting") ----
 
+const skipCooldownBtn = document.getElementById('skipCooldownBtn');
+const skipCooldown = makeHoldButton(skipCooldownBtn, {
+  label: 'Hold to ask now',
+  onFire: async () => {
+    clearInterval(countdownTimer);
+    skipCooldown.hide();
+    status.textContent = 'Asking…';
+    const response = await chrome.runtime.sendMessage({ type: 'OVERRIDE_COOLDOWN', hostname, targetUrl });
+    handleAccessResult(response);
+  },
+});
+
+function startCooldownCountdown(retryAtMs, cooldownHoldMs) {
+  clearInterval(countdownTimer);
+  btn.disabled = true;
+  skipCooldown.show('Hold to ask now', cooldownHoldMs);
+  countdownTimer = setInterval(() => {
+    const remaining = Math.max(0, retryAtMs - Date.now());
+    if (remaining <= 0) {
+      clearInterval(countdownTimer);
+      btn.disabled = false;
+      skipCooldown.hide();
+      status.textContent = '';
+      return;
+    }
+    status.textContent = `You just asked — try again in ${Math.ceil(remaining / 1000)}s, or hold below to ask now anyway`;
+  }, 250);
+}
+
+// Shared by both the normal "Request access" click and skip-cooldown's hold
+// — both end up asking the bandit for a real decision, just via a different
+// path to get there.
+function handleAccessResult(response) {
   if (response.granted) {
     status.textContent = `Granted for ${response.durationMin} minute${response.durationMin === 1 ? '' : 's'} — redirecting…`;
+    skipCooldown.hide();
     goToTarget();
     return;
   }
 
   if (response.cooldown) {
-    startCooldownCountdown(response.retryAtMs);
+    // Shouldn't normally happen from a skip-cooldown call, but stay consistent if it does.
+    startCooldownCountdown(response.retryAtMs, response.cooldownHoldMs);
     return;
   }
 
   status.textContent = 'Not granted this time.';
   btn.disabled = false;
+  skipCooldown.hide();
   armOverrideButton(response.overrideDelaySec, response.overrideHoldMs);
+}
+
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  override.hide();
+  skipCooldown.hide();
+  clearInterval(overrideDelayTimer);
+  clearInterval(countdownTimer);
+  status.textContent = 'Thinking…';
+  const response = await chrome.runtime.sendMessage({ type: 'REQUEST_ACCESS', hostname, targetUrl });
+  handleAccessResult(response);
 });
 
 // ---- extend ("Continue watching" after an extremely long session ended) ----

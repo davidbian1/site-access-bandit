@@ -18,8 +18,19 @@ brief, time-limited access — and learns from what you actually do with it.
 3. A **disjoint LinUCB bandit** (one independent model per site) scores four
    arms — deny, 5 min, 15 min, 30 min — and picks the highest upper-confidence
    bound. If it picks "deny," nothing is granted, but you can just try again
-   after a short cooldown (default 10 sec) — every new destination gets its
-   own fresh decision anyway, so this is a brief pause rather than a lockout.
+   after a short cooldown (default 10 sec, up to 120 sec after heavy recent
+   use — see Cooldown, below) — every new destination gets its own fresh
+   decision anyway, so this is meant as a brief pause rather than a lockout.
+   If the cooldown itself is what's in the way, though — not a denial, just
+   the wait — the "Request access" page also shows "Ask now instead of
+   waiting": hold it and you skip straight to a real decision instead of
+   watching a clock. This exists because a tool that makes waiting the only
+   option eventually gets disabled outright, which is strictly worse than
+   any in-app override — zero logging, zero learning, unlimited access.
+   Spending effort to skip *ahead* of a wait is the same trade this whole
+   system makes everywhere else; leaving no way to do that at all isn't a
+   feature, it's a gap. It still goes through the normal bandit decision —
+   asking sooner doesn't mean the answer is yes.
    If it grants time, you're redirected to the
    page you originally wanted, with the chosen duration acting as a ceiling
    for that one page — if you just sit on it, you get kicked back to the
@@ -194,6 +205,16 @@ the moment it doesn't — instead of a fixed delay that only ever gets easier
 to click through regardless of how much time you're actually spending.
 `minCooldownSec`, `maxCooldownSec`, and `cooldownRampSecPerMin` are all
 editable on the options page.
+
+Whatever the cooldown works out to, you're never actually stuck waiting it
+out — "Ask now instead of waiting" (point 3, above) always skips it via a
+held press instead, no separate delay of its own, since the wait is exactly
+what it's replacing. Note this doesn't currently escalate with repeated use
+the way override and extend do; it's a straightforward "spend a moment of
+effort instead of watching a clock" release valve, on the theory that a
+cooldown you can't ever get past except by waiting or disabling the
+extension is worse than one you can skip for a small, flat cost. If it turns
+out to need its own abuse ramp later, that's a natural next step.
 
 ## Data storage
 
