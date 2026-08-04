@@ -207,34 +207,50 @@ more thing that can have a supply-chain issue, one more `npm install`
 in CI. I think it's worth it for a check this standard and this cheap
 to run, but it's a judgment call, not a slam dunk.
 
+### 9. Trialed JSDoc + `jsconfig.json` static typing — reverted, didn't clear the bar
+
+You set a specific test for this one: only do it if it both (a) actually
+catches errors and (b) is easy. I installed `typescript` as a
+devDependency, added a `jsconfig.json` scoped to `lib/**/*.js`, and ran
+`tsc -p jsconfig.json` against the existing code with no annotations
+added yet, in both modes:
+
+- **Non-strict** (`checkJs` on, `strict` off): zero diagnostics. Every
+  unannotated parameter silently becomes `any`, which is compatible with
+  everything, so this mode catches nothing at all on this codebase as it
+  stands. Fails test (a) outright.
+- **Strict** (`noImplicitAny` on, which is what actually makes it *find*
+  anything): ~60 errors, every one of them "parameter implicitly has an
+  'any' type" — on every parameter of every function, including small
+  internal helpers like `linucb.js`'s `matVec`/`dot`/`outer`/`matAdd`
+  that were never meant to be part of any public API. Clearing that
+  means annotating every parameter across three files, plus writing
+  typedefs for `Settings`, `Session`, `Grant`, `GraceEntry`, `TrustEntry`,
+  and the raw context-vector shape. That's real work, not a quick pass.
+  Fails test (b).
+
+Since neither mode satisfies both conditions at once, I rolled it back
+completely — removed `jsconfig.json`, uninstalled `typescript`, working
+tree confirmed clean again. Noting the actual result here instead of
+just the intent, per "if there were any [bad practices], let me know" —
+this wasn't a bad practice I let slide, it's a real trial that came back
+negative, which is exactly the kind of honest data point worth keeping
+even though the change itself didn't survive.
+
+### 10. Added `author` field to `package.json`
+
+Set to `workerbumblebee`, per your instruction. Left `repository` out
+for now — see the GitHub questions below.
+
 ## Considered and not done — open questions for you
 
-These are genuine "could still do this" items I stopped short of,
-because they trade off against the project's own stated design goals
-or need a decision only you can make:
-
-1. **JSDoc + `jsconfig.json` (`checkJs: true`) for lightweight static
-   typing**, without introducing TypeScript as a build step. `lib/*.js`
-   already has thorough prose comments explaining *why*; formalizing
-   them into `@param`/`@returns` JSDoc tags would let editors and a
-   `tsc --noEmit --checkJs` CI step catch type mistakes (e.g. passing a
-   string where `computeGrantReward` expects a number) before a test
-   even runs. I didn't do this because it's a second new dependency
-   (`typescript`, dev-only) and a non-trivial annotation pass across
-   ~15 exported functions, and the logic it would protect is already
-   covered by the existing test suite — the marginal value is real but
-   smaller than it'd be for untested code. Worth doing if you want to
-   point to static typing discipline specifically; skippable otherwise.
-2. **Extension icons.** `manifest.json` has no `icons` field, so the
+1. **Extension icons.** `manifest.json` has no `icons` field, so the
    toolbar shows Chrome's default puzzle-piece icon rather than a
    custom one. This is a polish/completeness gap, not a hygiene issue,
    and not something I should generate blind — if you want this, it
    needs an actual icon design (or at least a placeholder you're happy
    with), not something I fabricate on your behalf.
-3. **`package.json` `author`/`repository` fields.** Currently absent.
-   Cheap to add, but needs your preferred public name/handle and repo
-   URL rather than a guess from me.
-4. I still could not load the unpacked extension in this environment to
+2. I still could not load the unpacked extension in this environment to
    click-test the popup/options pages after the `type="module"` change
    from the first pass, or to confirm the new lint step doesn't trip on
    anything ESLint's Node-side run can't see. Everything passes
