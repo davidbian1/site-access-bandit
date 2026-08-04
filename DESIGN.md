@@ -37,11 +37,9 @@ rejected.
 
 ## Why a separate model per site (disjoint across sites, not just across arms)
 
-Each managed site gets its own independent `LinUCB` instance — the
-README lists this explicitly, but under **"Known limitations (MVP
-scope)"**, not as a permanent design principle: *"Each managed site gets
-its own independent bandit model (no sharing of learned weights across
-sites)."*
+Each managed site gets its own independent `LinUCB` instance — listed
+explicitly under [Known limitations](#known-limitations-mvp-scope)
+below, not framed as a permanent design principle.
 
 That framing matters: it reads as a scope cut for v0.1, not a considered
 rejection of shared weights. **Not documented:** whether a shared/hybrid
@@ -249,6 +247,38 @@ override calculations via Node's built-in `node:test` runner. There's no
 automated coverage of the browser-integration pieces (`background.js`'s
 `chrome.*`-driven logic, `content.js`/`content-main.js`, the DNR rules) —
 those need manual verification in an actual loaded extension.
+
+## Development
+
+Requires Node 18+ — only for running tests and linting. The extension
+itself has zero runtime dependencies and no build step; `Load unpacked`
+runs the source files directly.
+
+```
+npm install
+npm test
+npm run lint
+```
+
+`npm run lint` runs ESLint (`eslint.config.js`) over the whole repo —
+its one job is catching real mistakes (unused variables, references to
+undeclared globals), not enforcing a formatting style. Both commands run
+in CI on every push and PR.
+
+## Known limitations (MVP scope)
+
+- Blocking only covers top-level (`main_frame`) navigations, not iframes.
+- Active-time tracking samples on a timer (default every 30s) rather than
+  listening to every focus/visibility event, so it's an approximation.
+- Each managed site gets its own independent bandit model (no sharing of
+  learned weights across sites).
+- `content.js` re-checks the current URL every 300ms as a fallback, on
+  top of the `pushState`/`replaceState`/`popstate` hooks, to catch
+  client-side routing that doesn't go through any of those three. This is
+  a deliberate trade-off, not an oversight: it costs a small, constant
+  amount of CPU on every open tab of a managed site for as long as that
+  tab stays open, in exchange for not missing navigations the real hooks
+  can't see.
 
 ## Open questions — rationale not documented anywhere in the repo
 
