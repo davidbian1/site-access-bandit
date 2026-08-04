@@ -1,71 +1,47 @@
 # Mindful Access Bandit
 
-A Manifest V3 Edge/Chromium extension that uses a contextual bandit to
-decide, each time you try to visit a site you've chosen to restrict,
-whether to grant brief, time-limited access — and learns from what you
-actually do with it. Everything stays in `chrome.storage.local`; nothing
-leaves your device.
+[![MIT License](https://img.shields.io/badge/license-MIT-8ab4f8.svg)](LICENSE)
+[![Tests](https://github.com/davidbian1/site-access-bandit/actions/workflows/test.yml/badge.svg)](https://github.com/davidbian1/site-access-bandit/actions/workflows/test.yml)
+[![Manifest V3](https://img.shields.io/badge/manifest-v3-81c784.svg)](manifest.json)
 
-See [DESIGN.md](DESIGN.md) for how the bandit, reward function, and
-gating mechanics actually work, and why.
+### Ever lose an hour to a site you didn't mean to open?
 
-## What it does
+Mindful Access Bandit is a browser extension that puts a small, learning
+gatekeeper in front of the sites you choose to restrict — Instagram,
+YouTube, whatever pulls you in. It doesn't just block them outright. It
+decides, in the moment, whether a few minutes of access makes sense right
+now — and it gets better at that call the more you use it.
 
-- You choose which sites to manage, from the popup or options page.
-- Visiting a managed site redirects you to a local "Access limited" page
-  instead of loading it.
-- "Request access" asks a per-site bandit model for a decision: deny, or
-  grant for a few minutes. A denial isn't permanent — a short adaptive
-  cooldown and you can ask again, or spend a moment of effort to skip
-  the wait instead of watching a clock.
-- If denied and you genuinely need the page, "I really need this" is a
-  deliberately effortful override (a wait, then a press-and-hold), not a
-  one-tap escape hatch.
-- Access is granted per page, not per site — navigating to a new page,
-  including client-side routing (e.g. the next video in a feed),
-  triggers a fresh decision. Unusually long sessions get one narrow,
-  effortful "continue watching" exception.
-- The model updates after every session based on how long you actually
-  stayed, so it adapts over time to when and how you actually use each
-  site.
+![Demo of the blocked page granting brief access, then the popup tracking the session](assets/demo.gif)
+
+## What it does for you
+
+- **Pick the sites that get to you.** Everything else on the web is
+  untouched.
+- **No flat "no."** Ask, and it decides — deny, or a short grant — based
+  on the time of day and how you've actually been using that site lately.
+- **Denied isn't stuck.** A short wait and you can ask again. If you
+  genuinely need the page, there's a deliberately effortful override —
+  not a one-tap bypass.
+- **It learns.** Every session feeds back into the model, so over time it
+  gets sharper about when access is actually worth granting.
+- **Nothing leaves your device.** All of it — sites, history, the model
+  itself — stays local.
 
 ## Install (unpacked, developer mode)
 
-1. Open `edge://extensions`.
-2. Turn on **Developer mode** (bottom-left toggle).
+1. Open `edge://extensions` (or `chrome://extensions`).
+2. Turn on **Developer mode**.
 3. Click **Load unpacked** and select this folder.
 4. Click the extension icon, add a site you want to restrict, and try
    visiting it.
 
-## Usage
+## Want the technical details?
 
-- **Popup** (toolbar icon): manage the current tab's site, see or end an
-  active grant, view your list of managed sites.
-- **Options page**: full site list, bandit/reward parameters (all
-  editable), per-site bandit debug view, and session history.
-
-## Development
-
-Requires Node 18+ — only for running tests and linting. The extension
-itself has zero runtime dependencies and no build step; `Load unpacked`
-runs the source files directly.
-
-```
-npm install
-npm test
-npm run lint
-```
-
-Both run in CI on every push and PR. See [DESIGN.md](DESIGN.md#code-layout)
-for what each file does and what the test suite covers.
-
-## Known limitations (MVP scope)
-
-- Blocking only covers top-level (`main_frame`) navigations, not iframes.
-- Active-time tracking samples on a timer rather than every focus/
-  visibility event, so it's an approximation.
-- Each managed site gets its own independent bandit model — no sharing
-  of learned weights across sites.
+This README is deliberately just the pitch. For how the bandit actually
+works — the algorithm, the reward function, every formula and default,
+the code layout, and how to run the tests — see
+**[DESIGN.md](DESIGN.md)**.
 
 ## License
 
