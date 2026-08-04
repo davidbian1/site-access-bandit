@@ -12,7 +12,7 @@ YouTube, whatever pulls you in. It doesn't just block them outright. It
 decides, in the moment, whether a few minutes of access makes sense right
 now — and it gets better at that call the more you use it.
 
-![Demo of the blocked page granting brief access, then the popup tracking the session](assets/demo.gif)
+![Demo: a blocked page that first denies access with an effortful override option, then on a later visit grants brief access and tracks the session from the popup](assets/demo.gif)
 
 ## What it does for you
 
