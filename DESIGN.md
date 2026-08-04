@@ -69,23 +69,46 @@ site-category signal.
 
 ## Reward function — access is never positive, only avoiding it is
 
-Fully documented, in the README's "Reward function" section and in
-`lib/config.js`'s comments — no blanks here:
+Fully documented in `lib/config.js`'s comments — no blanks here.
 
-- A denial that stands (never overridden) gets a flat positive reward
-  (`denyReward`, default 0.15).
-- Any granted session — whether from a normal decision or from
-  overriding a denial — is only ever a penalty: scaled by active minutes,
-  plus a frequency penalty for repeat visits within a window (so a binge
-  of many short visits can't each score near-zero the way one would),
-  plus an extra flat penalty if it came from an override. Clamped to
-  `[-1, 0]`.
+A denial that stands (never overridden):
 
-The explicitly stated intent (from the README, verbatim in spirit): the
-bandit's baseline preference is always toward denying — a grant arm can
-only ever "lose less" in a given context, never accumulate a positive
-score of its own. Access has to be earned back per-context by costing
-less, not by being rewarded.
+```
+reward = denyReward   (default 0.15)
+```
+
+A granted session — whether from a normal decision or from overriding a
+denial:
+
+```
+reward = - activeMinutes * penaltyPerMinute
+         - min(maxFrequencyPenalty, recentSessionCount * frequencyPenaltyPerSession)
+         - (wasOverride ? overrideSessionPenalty : 0)
+```
+
+clamped to `[-1, 0]`. `recentSessionCount` is how many other sessions on
+this site already landed within the last `frequencyWindowMin` (default
+30 min) — without it, a string of short visits would each score close to
+0 (the best a grant can score) and the bandit would read that as "fine
+to keep allowing"; the frequency term makes repeat visits chip away at
+the reward regardless of how short each one was individually.
+
+If the session came from an override, `overrideSessionPenalty` (default
+0.3) applies on top — separate from, and in addition to,
+`denyOverridePenalty` (default 0.4, see below), which retroactively
+flips the *original* deny decision's reward from positive to negative.
+Together an override costs twice: once on the decision it overrode, once
+on the session it produced.
+
+Defaults: `penaltyPerMinute = 1/30` (30 active minutes ≈ -1),
+`denyReward = 0.15`, `overrideSessionPenalty = 0.3`,
+`frequencyPenaltyPerSession = 0.1`, `maxFrequencyPenalty = 1.0`. All
+editable on the options page, along with `alpha` and the arm durations.
+
+The stated intent: the bandit's baseline preference is always toward
+denying — a grant arm can only ever "lose less" in a given context,
+never accumulate a positive score of its own. Access has to be earned
+back per-context by costing less, not by being rewarded.
 
 ## Per-navigation re-gating (no implicit free-roam window)
 
@@ -98,50 +121,134 @@ moment the URL changes, so every new video/post/page gets its own fresh
 decision. The stated reasoning: duration-based limits are meaningless if
 navigating to the *next* thing is free.
 
+## Override wait — grows with abuse, shrinks with demonstrated patience
+
+Getting the "I really need this" button to even become pressable takes a
+wait computed as:
+
+```
+overrideDelaySec = clamp(
+  overrideBaseDelaySec + overrideDelayRampSec * recentOverrideCount
+                        - overrideEffortDiscountSec * denyStreak,
+  0, overrideMaxDelaySec
+)
+```
+
+Defaults: base 20 sec, +60 sec per override already used on this site in
+the last 4 hours (`overrideWindowMin`), -8 sec per consecutive genuine
+denial you've patiently gone through the normal ask-and-wait flow for
+since your last grant or override (`recentDenyStreak`) — floors at 0
+(instant), ceilings at 600 sec. Once enabled it still needs a sustained
+3-second press-and-hold (`overrideHoldMs`), not a click.
+
 ## Grace credits — override grace is generous, extend grace is scarce
 
-Both are documented with explicit reasoning, and the asymmetry between
-them is deliberate, not accidental:
+Both bank a credit consumed via `consumeGrace()` in `lib/config.js`: each
+navigation that spends a hop also halves whatever time was left on the
+credit, on top of decrementing the hop counter — so it degrades on two
+axes at once and can't be stretched past what it was earned for.
 
-- **Override grace** (after successfully overriding a denial): hop count
-  generous enough to feel like free browsing for the window's duration.
-  Reasoning given: the effort of getting through the wait-and-hold should
-  buy more than the one page it was spent on, or the mechanism is
+- **Override grace** (after successfully overriding a denial):
+  `overrideGraceMin` (default 5 min) and `overrideGraceHopCount`
+  (default **50**) — generous enough to feel like free browsing for the
+  window's duration. Reasoning given: the effort of the wait-and-hold
+  should buy more than the one page it was spent on, or the mechanism is
   pointless.
-- **Extend grace** (after an extremely long session, offered once): hop
-  count of 1 by default — deliberately scarce. Reasoning given: this
-  isn't correcting a wrongful denial the way override is; it's a narrow,
-  single-use exception for a session that already ran unusually long.
+- **Extend grace** (after an extremely long session, offered once):
+  `extendGraceMin` (default 15 min) and `extendHopCount` (default **1**)
+  — deliberately scarce. Reasoning given: this isn't correcting a
+  wrongful denial the way override is; it's a narrow, single-use
+  exception for a session that already ran unusually long.
 
 ## Trust decay — half-life instead of a hard expiry
 
+A per-site trust value (0–1) is bumped by `trustOverrideBoost` (default
+0.6, capped at 1) on a successful override, and decays exponentially with
+`trustHalfLifeMin` (default 90 min) rather than expiring outright.
+Whatever hasn't decayed away discounts both the retry cooldown and the
+override wait, up to `trustMaxDiscount` (default 70%) at full trust.
+
 Documented reasoning: a flat grace window is fine for "let me finish what
 I was doing," but effort spent on an override shouldn't evaporate the
-instant that window lapses. Trust decays smoothly on a half-life
-(default 90 min) instead of snapping to zero at a cutoff, so coming back
-to a site soon after is still somewhat easier, fading gradually rather
-than falling off a cliff.
+instant that window lapses — trust lets the benefit fade smoothly
+instead of snapping to zero at a cutoff.
 
 ## Adaptive cooldown instead of a fixed number
 
-Documented reasoning: a fixed cooldown only ever gets easier to click
-through the more you use the extension, regardless of whether your
-actual usage has been getting heavier or lighter. Cooldown is instead
-computed from the same recent-active-time stat the bandit's context
-already tracks, so it drifts toward the floor after brief recent
-sessions and toward the ceiling after long ones.
+```
+cooldownSec = clamp(
+  minCooldownSec + cooldownRampSecPerMin * avgRecentActiveMin,
+  minCooldownSec, maxCooldownSec
+)
+```
+
+Defaults: floor 5 sec, ceiling 120 sec, ramp 8 sec per minute of recent
+average active time. Documented reasoning: a fixed cooldown only ever
+gets easier to click through the more you use the extension, regardless
+of whether your actual usage has been getting heavier or lighter — this
+keeps the friction tied to actual recent behavior instead. It does *not*
+currently escalate with repeated skip-cooldown use the way override and
+extend do — a straightforward "spend a moment of effort instead of
+watching a clock" release valve rather than another abuse ramp. Whether
+it needs one is an open question, not a decision either way.
 
 ## Long-form dwell (automatic) vs. extreme long-form extend (effort-gated)
 
-Documented distinction, with reasoning given for why these are treated
-differently: staying on the *same* page past its timer gets one
-automatic, effort-free exception (a silent re-draw if you're still
-actively watching and already dwelled past a threshold) — described as
-the only automatic exception anywhere in the system. Navigating to a
-*new* page always hits the gate; the only way past it is the effort-
-gated extend offer, and only after an extreme (well past long-form)
-session. The stated reasoning: staying put isn't really "one more site
-to gate," but navigating to something new always is, by design.
+Two thresholds, treated deliberately differently:
+
+- `longFormDwellMin` (default 8 min): if you're still actively watching
+  when a grant's timer runs out and you'd already dwelled this long, the
+  extension silently re-asks the bandit with the current context instead
+  of hard-cutting you — the only automatic, effort-free exception
+  anywhere in the system, and it only ever applies to staying on the
+  *same* page.
+- `extremeLongFormMin` (default 45 min): if a session you're navigating
+  *away* from ran this long, the blocked page you land on offers
+  "Continue watching" for `extendOfferWindowMin` (default 2 min) before
+  the offer lapses — the effort-gated extend mechanic above.
+
+Stated reasoning for the split: staying put isn't really "one more site
+to gate," but navigating to something new always is, by design — the
+extreme-session exception exists because that's still a strong enough
+signal to be worth a narrow, effortful escape hatch.
+
+## Code layout
+
+- `manifest.json` — MV3 manifest (`declarativeNetRequest`, `alarms`,
+  `tabs`, `scripting`, `storage`; host permissions requested per-site via
+  the optional permissions API, not baked in up front).
+- `background.js` — service worker: decision logic, DNR rule management,
+  dynamic content-script (re)registration per managed site, active-time
+  tracking, session finalization, messaging API for the UI pages and
+  content script.
+- `content-main.js` — registered in the page's own MAIN world (not the
+  extension's isolated world) on every managed site. Patches
+  `history.pushState`/`replaceState` so client-side route changes are
+  actually seen — an isolated-world override only patches a copy the
+  page's own script never calls. Rebroadcasts every navigation as a DOM
+  event.
+- `content.js` — isolated world (has `chrome.*` API access); listens for
+  `content-main.js`'s event and ends the current grant, forcing a fresh
+  decision for the new destination.
+- `lib/linucb.js` — the LinUCB bandit implementation (plain JS, no deps).
+- `lib/config.js` — shared constants, context-feature builder, reward
+  function.
+- `lib/background-helpers.js` — `background.js`'s pure helpers
+  (recent-usage window stats, grant construction, DNR rule-id
+  bookkeeping), split out so they're unit-testable without a `chrome.*`
+  mock.
+- `blocked.html` / `blocked.js` — the page shown instead of a blocked
+  site.
+- `popup.html` / `popup.js` — quick add/remove sites, see/end the active
+  grant for the current tab's site.
+- `options.html` / `options.js` — full site list, bandit/reward
+  parameters, per-site bandit debug view, session history.
+
+`lib/*.test.js` covers the bandit math and the reward/cooldown/trust/
+override calculations via Node's built-in `node:test` runner. There's no
+automated coverage of the browser-integration pieces (`background.js`'s
+`chrome.*`-driven logic, `content.js`/`content-main.js`, the DNR rules) —
+those need manual verification in an actual loaded extension.
 
 ## Open — not documented anywhere, needs your answer if you want it captured
 
