@@ -1,10 +1,4 @@
-function hostnameFromUrl(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
+import { hostnameFromUrl } from './lib/config.js';
 
 function fmtRemaining(ms) {
   const totalSec = Math.max(0, Math.round(ms / 1000));

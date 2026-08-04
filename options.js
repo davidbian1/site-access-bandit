@@ -1,11 +1,4 @@
-function normalizeHostname(input) {
-  try {
-    const withScheme = /^[a-zA-Z]+:\/\//.test(input) ? input : `https://${input}`;
-    return new URL(withScheme).hostname.replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
+import { normalizeHostname } from './lib/config.js';
 
 async function requestHostPermission(hostname) {
   return chrome.permissions.request({ origins: [`*://*.${hostname}/*`, `*://${hostname}/*`] });
