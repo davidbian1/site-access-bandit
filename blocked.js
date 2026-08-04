@@ -216,6 +216,9 @@ const extend = makeHoldButton(extendBtn, {
       return;
     }
 
+    status.textContent = response.error === 'no extend offer available'
+      ? 'That offer expired — try Request access instead.'
+      : "Couldn't continue — try Request access instead.";
     extend.hide();
   },
 });
