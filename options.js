@@ -10,7 +10,13 @@ async function loadSites() {
   tbody.innerHTML = '';
   for (const site of status.sites) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${site.hostname}</td><td>${new Date(site.addedAt).toLocaleDateString()}</td><td></td><td></td>`;
+    const hostnameTd = document.createElement('td');
+    hostnameTd.textContent = site.hostname;
+    const addedTd = document.createElement('td');
+    addedTd.textContent = new Date(site.addedAt).toLocaleDateString();
+    const actionTd = document.createElement('td');
+    const spacerTd = document.createElement('td');
+
     const removeBtn = document.createElement('button');
     removeBtn.className = 'danger';
     removeBtn.textContent = 'Remove';
@@ -18,7 +24,9 @@ async function loadSites() {
       await chrome.runtime.sendMessage({ type: 'REMOVE_SITE', hostname: site.hostname });
       loadSites();
     });
-    tr.children[2].appendChild(removeBtn);
+    actionTd.appendChild(removeBtn);
+
+    tr.append(hostnameTd, addedTd, actionTd, spacerTd);
     tbody.appendChild(tr);
   }
 }
@@ -120,7 +128,11 @@ document.getElementById('debugBtn').addEventListener('click', async () => {
   tbody.innerHTML = '';
   for (const s of scores) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${s.durationMin}</td><td>${s.mean.toFixed(3)}</td><td>${s.variance.toFixed(3)}</td><td>${s.ucb.toFixed(3)}</td>`;
+    for (const text of [s.durationMin, s.mean.toFixed(3), s.variance.toFixed(3), s.ucb.toFixed(3)]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   }
 });
@@ -147,7 +159,20 @@ async function loadSessions() {
   for (const s of sessions.slice(0, 200)) {
     const tr = document.createElement('tr');
     const endReason = s.overridden ? `${s.endReason} (overridden)` : s.endReason;
-    tr.innerHTML = `<td>${s.hostname}</td><td>${new Date(s.grantedAt).toLocaleString()}</td><td>${s.decision}</td><td>${s.durationMin}</td><td>${s.activeMinutes.toFixed(1)}</td><td>${s.reward.toFixed(3)}</td><td>${endReason}</td>`;
+    const cells = [
+      s.hostname,
+      new Date(s.grantedAt).toLocaleString(),
+      s.decision,
+      s.durationMin,
+      s.activeMinutes.toFixed(1),
+      s.reward.toFixed(3),
+      endReason,
+    ];
+    for (const text of cells) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   }
 }
