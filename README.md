@@ -284,3 +284,10 @@ above.
   listening to every focus/visibility event, so it's an approximation.
 - Each managed site gets its own independent bandit model (no sharing of
   learned weights across sites).
+- `content.js` re-checks the current URL every 300ms as a fallback, on top
+  of the `pushState`/`replaceState`/`popstate` hooks, to catch client-side
+  routing that doesn't go through any of those three (some sites mutate
+  the URL via other means entirely). This is a deliberate trade-off, not
+  an oversight: it costs a small, constant amount of CPU on every open tab
+  of a managed site for as long as that tab stays open, in exchange for
+  not missing navigations the real hooks can't see.
