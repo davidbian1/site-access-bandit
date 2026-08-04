@@ -38,8 +38,15 @@ function makeHoldButton(el, { label, onFire }) {
     el.classList.remove('holding');
   }
 
-  function startHold() {
+  function startHold(e) {
     if (el.disabled || firing) return;
+    e.preventDefault();
+    // Capture the pointer so this element keeps getting its move/up events
+    // even if the cursor drifts outside its bounds mid-hold - over a
+    // multi-second hold that's normal hand movement, not a release, and
+    // without capture it fires a plain mouseleave/pointerleave that would
+    // cancel a hold the user never actually let go of.
+    el.setPointerCapture(e.pointerId);
     holding = true;
     el.classList.add('holding');
     fill.style.transitionDuration = `${holdMs}ms`;
@@ -56,15 +63,9 @@ function makeHoldButton(el, { label, onFire }) {
     firing = false;
   }
 
-  el.addEventListener('mousedown', startHold);
-  el.addEventListener('mouseup', cancelHold);
-  el.addEventListener('mouseleave', cancelHold);
-  el.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    startHold();
-  });
-  el.addEventListener('touchend', cancelHold);
-  el.addEventListener('touchcancel', cancelHold);
+  el.addEventListener('pointerdown', startHold);
+  el.addEventListener('pointerup', cancelHold);
+  el.addEventListener('pointercancel', cancelHold);
 
   return {
     show(readyLabel, holdMsFromServer) {
