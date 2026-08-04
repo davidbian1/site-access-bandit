@@ -4,9 +4,9 @@ This is about the system itself — why it's built the way it is, not the
 engineering-hygiene pass that touched file structure/tests/tooling.
 
 Every claim below is grounded in something actually documented in the
-README or in a code comment; where the "why" behind a decision isn't
-written down anywhere, it's marked **not documented** rather than guessed
-at. Some of those still need your answer.
+README or in a code comment. Where the "why" behind a decision isn't
+written down anywhere, it's marked **not documented** rather than
+guessed at.
 
 ## Why a contextual bandit at all
 
@@ -14,7 +14,7 @@ at. Some of those still need your answer.
 grant/deny/duration per visit, learns from actual active time), but
 nowhere explains why this problem called for a bandit specifically
 rather than, say, a fixed per-time-of-day schedule, a simple rule engine,
-or manual quotas. If you remember the reasoning — worth adding here.
+or manual quotas.
 
 ## Why LinUCB, specifically
 
@@ -31,9 +31,9 @@ contexts it's less certain about, not at random.
 
 **Not documented:** why LinUCB over alternatives (epsilon-greedy,
 Thompson Sampling, a non-linear bandit). It's a reasonable, standard
-choice for a low-dimensional linear-ish problem like this one, but I
-don't have evidence that other options were weighed and rejected — that
-comparison isn't in the repo.
+choice for a low-dimensional linear-ish problem like this one, but
+there's no record in the repo of other options being weighed and
+rejected.
 
 ## Why a separate model per site (disjoint across sites, not just across arms)
 
@@ -250,7 +250,7 @@ automated coverage of the browser-integration pieces (`background.js`'s
 `chrome.*`-driven logic, `content.js`/`content-main.js`, the DNR rules) —
 those need manual verification in an actual loaded extension.
 
-## Open — not documented anywhere, needs your answer if you want it captured
+## Open questions — rationale not documented anywhere in the repo
 
 - Why a bandit-based approach over a simpler mechanism (fixed schedule,
   static rules, manual-only overrides)?
