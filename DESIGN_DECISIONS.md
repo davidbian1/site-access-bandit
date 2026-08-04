@@ -171,16 +171,74 @@ that addition.
 - **Converting `content.js`/`content-main.js` to modules** — see #3's
   trade-off note above.
 
-## Questions for you
+### 7. Documented the `content.js` polling fallback as intentional
 
-1. Do you want the `content.js` polling interval addressed (e.g. reduced
-   frequency, or documented as an intentional trade-off in the README's
-   "Known limitations" section)? I left it as-is since it changes runtime
-   behavior.
-2. I could not load the unpacked extension in this environment to
-   click-test the popup/options pages after the `type="module"` change.
-   The logic is syntax-checked and the existing test suite passes, but
-   please reload the extension in `edge://extensions` and open the popup
-   and options page once to confirm no console errors — this is exactly
-   the category of thing the README already calls out as needing manual
-   verification.
+Per your call: not a bug, so not a fix — added a bullet to the README's
+"Known limitations" explaining what the 300ms interval is for and what
+it costs, so it reads as a documented trade-off instead of an
+unexplained magic number.
+
+### 8. Added ESLint, wired into CI
+
+**What:** `eslint.config.js` (flat config, ESLint 9), `eslint`
+added as the project's first real dependency (devDependency only —
+the extension bundle itself is still zero runtime deps), `npm run
+lint` script, and a `npm ci` + `npm run lint` step added to
+`.github/workflows/test.yml` ahead of the existing test run.
+
+**Why:** There was no automated check for the ordinary class of JS
+mistakes — an unused variable left behind after a refactor, a typo'd
+`chrome.*` global, a variable used before declaration. Tests catch
+*logic* bugs; lint catches *this* category, and catches it before
+someone has to notice it in code review or at runtime. Configured for
+bugs, not style: just `js.configs.recommended` plus the browser/chrome
+globals this codebase actually uses (`chrome`, `window`, `document`,
+etc., listed explicitly rather than pulling in the `globals` npm
+package — one dependency was enough to ask for). No Prettier, no
+opinionated formatting rules — I didn't want to force a reformat of
+otherwise-fine code as a side effect of a hygiene pass. It ran clean
+against the existing codebase with zero findings, which is itself a
+useful data point: nothing was hiding.
+
+**Trade-off:** this is the repo's first dependency of any kind
+(`package-lock.json` now exists, `npm install` is now a real step
+before `npm test`/`npm run lint` do anything). That's a cost — one
+more thing that can have a supply-chain issue, one more `npm install`
+in CI. I think it's worth it for a check this standard and this cheap
+to run, but it's a judgment call, not a slam dunk.
+
+## Considered and not done — open questions for you
+
+These are genuine "could still do this" items I stopped short of,
+because they trade off against the project's own stated design goals
+or need a decision only you can make:
+
+1. **JSDoc + `jsconfig.json` (`checkJs: true`) for lightweight static
+   typing**, without introducing TypeScript as a build step. `lib/*.js`
+   already has thorough prose comments explaining *why*; formalizing
+   them into `@param`/`@returns` JSDoc tags would let editors and a
+   `tsc --noEmit --checkJs` CI step catch type mistakes (e.g. passing a
+   string where `computeGrantReward` expects a number) before a test
+   even runs. I didn't do this because it's a second new dependency
+   (`typescript`, dev-only) and a non-trivial annotation pass across
+   ~15 exported functions, and the logic it would protect is already
+   covered by the existing test suite — the marginal value is real but
+   smaller than it'd be for untested code. Worth doing if you want to
+   point to static typing discipline specifically; skippable otherwise.
+2. **Extension icons.** `manifest.json` has no `icons` field, so the
+   toolbar shows Chrome's default puzzle-piece icon rather than a
+   custom one. This is a polish/completeness gap, not a hygiene issue,
+   and not something I should generate blind — if you want this, it
+   needs an actual icon design (or at least a placeholder you're happy
+   with), not something I fabricate on your behalf.
+3. **`package.json` `author`/`repository` fields.** Currently absent.
+   Cheap to add, but needs your preferred public name/handle and repo
+   URL rather than a guess from me.
+4. I still could not load the unpacked extension in this environment to
+   click-test the popup/options pages after the `type="module"` change
+   from the first pass, or to confirm the new lint step doesn't trip on
+   anything ESLint's Node-side run can't see. Everything passes
+   `node --check`, the test suite, and `npm run lint` locally, but
+   please reload the extension in `edge://extensions` and open the
+   popup and options page once to confirm no console errors — same
+   manual-verification category the README already calls out.
