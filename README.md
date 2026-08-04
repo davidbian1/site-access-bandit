@@ -250,6 +250,9 @@ Everything (managed sites, bandit weights, session log, settings) lives in
   ends the current grant, forcing a fresh decision for the new destination.
 - `lib/linucb.js` — the LinUCB bandit implementation (plain JS, no deps).
 - `lib/config.js` — shared constants, context-feature builder, reward function.
+- `lib/background-helpers.js` — background.js's pure helpers (recent-usage
+  window stats, grant construction, DNR rule-id bookkeeping), split out so
+  they're unit-testable without a chrome.* mock.
 - `blocked.html` / `blocked.js` — the page shown instead of a blocked site.
 - `popup.html` / `popup.js` — quick add/remove sites, see/end the active grant
   for the current tab's site.
