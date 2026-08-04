@@ -261,21 +261,28 @@ Everything (managed sites, bandit weights, session log, settings) lives in
 
 ## Development
 
-Requires Node 18+ — only for running tests. The extension itself has zero
-runtime dependencies and no build step; `Load unpacked` runs the source files
-directly.
+Requires Node 18+ — only for running tests and linting. The extension itself
+has zero runtime dependencies and no build step; `Load unpacked` runs the
+source files directly.
 
 ```
+npm install
 npm test
+npm run lint
 ```
 
-Runs the pure-function test suite (`lib/*.test.js`, using Node's built-in
-`node:test` runner — no test framework dependency) covering the bandit math
-and the reward/cooldown/trust/override calculations. There's no automated
-coverage of the browser-integration pieces (`background.js`'s
+`npm test` runs the pure-function test suite (`lib/*.test.js`, using Node's
+built-in `node:test` runner — no test framework dependency) covering the
+bandit math and the reward/cooldown/trust/override calculations. There's no
+automated coverage of the browser-integration pieces (`background.js`'s
 `chrome.*`-API-driven logic, `content.js`/`content-main.js`, the DNR rules) —
 those need manual verification in an actual loaded extension; see Install,
 above.
+
+`npm run lint` runs ESLint (`eslint.config.js`) over the whole repo — its
+one job here is catching real mistakes (unused variables, references to
+undeclared globals) rather than enforcing a formatting style. Both `npm
+test` and `npm run lint` run in CI on every push and PR.
 
 ## Known limitations (MVP scope)
 
