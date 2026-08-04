@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "author": "workerbumblebee",
   "engines": {
     "node": ">=18"
   },
