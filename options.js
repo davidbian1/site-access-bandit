@@ -45,6 +45,7 @@ document.getElementById('addSiteBtn').addEventListener('click', async () => {
 async function loadSettings() {
   const { settings } = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
   document.getElementById('alpha').value = settings.alpha;
+  document.getElementById('discountFactor').value = settings.discountFactor;
   document.getElementById('armDurations').value = settings.armDurationsMin.join(',');
   document.getElementById('penaltyPerMinute').value = settings.penaltyPerMinute;
   document.getElementById('denyReward').value = settings.denyReward;
@@ -84,6 +85,7 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
 
   const settings = {
     alpha: parseFloat(document.getElementById('alpha').value),
+    discountFactor: parseFloat(document.getElementById('discountFactor').value),
     armDurationsMin,
     penaltyPerMinute: parseFloat(document.getElementById('penaltyPerMinute').value),
     denyReward: parseFloat(document.getElementById('denyReward').value),
@@ -158,7 +160,10 @@ async function loadSessions() {
   tbody.innerHTML = '';
   for (const s of sessions.slice(0, 200)) {
     const tr = document.createElement('tr');
-    const endReason = s.overridden ? `${s.endReason} (overridden)` : s.endReason;
+    const endReasonParts = [s.endReason];
+    if (s.overridden) endReasonParts.push('overridden');
+    if (s.stale) endReasonParts.push('stale — not trained');
+    const endReason = endReasonParts.join(' / ');
     const cells = [
       s.hostname,
       new Date(s.grantedAt).toLocaleString(),
