@@ -267,7 +267,13 @@ Two thresholds, treated deliberately differently:
   extension silently re-asks the bandit with the current context instead
   of hard-cutting you — the only automatic, effort-free exception
   anywhere in the system, and it only ever applies to staying on the
-  *same* page.
+  *same* page. The actual threshold used is `min(longFormDwellMin,
+  grant.durationMin)`, not the flat 8 minutes alone — otherwise the
+  shortest arm (5 min, below the 8-minute default) could never reach the
+  floor before its own grant expired, making it structurally exempt from
+  this protection no matter how attentively it was used. Fully using a
+  short grant is itself a genuine engagement signal, just like fully
+  using a long one is.
 - `extremeLongFormMin` (default 45 min): if a session you're navigating
   *away* from ran this long, the blocked page you land on offers
   "Continue watching" for `extendOfferWindowMin` (default 2 min) before

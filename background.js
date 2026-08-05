@@ -14,7 +14,14 @@ import {
   applyTrustDiscount,
   consumeGrace,
 } from './lib/config.js';
-import { escapeRegex, ruleIdFor, makeGrant, recentStatsFor, isGrantStale } from './lib/background-helpers.js';
+import {
+  escapeRegex,
+  ruleIdFor,
+  makeGrant,
+  recentStatsFor,
+  isGrantStale,
+  isLongFormEngaged,
+} from './lib/background-helpers.js';
 
 const TICK_ALARM = 'tick';
 
@@ -305,7 +312,7 @@ async function handleExpiry(hostname) {
   const grant = store.grants[hostname];
   if (!grant) return;
 
-  const longFormEngaged = grant.activeSeconds >= store.settings.longFormDwellMin * 60;
+  const longFormEngaged = isLongFormEngaged(grant.activeSeconds, grant.durationMin, store.settings.longFormDwellMin);
   let activeTab = null;
   try {
     [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
