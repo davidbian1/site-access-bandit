@@ -83,6 +83,9 @@ function makeHoldButton(el, { label, onFire }) {
     enable() {
       el.disabled = false;
     },
+    isHolding() {
+      return holding;
+    },
     setLabel,
   };
 }
@@ -155,6 +158,13 @@ function startCooldownCountdown(retryAtMs, cooldownHoldMs) {
   countdownTimer = setInterval(() => {
     const remaining = Math.max(0, retryAtMs - Date.now());
     if (remaining <= 0) {
+      // A hold already in progress should get to finish and fire rather
+      // than having the button yanked out from under it just because the
+      // natural cooldown clock ran out mid-hold. If it fires, onFire clears
+      // this interval itself; if it's released without firing, keep
+      // polling until it's no longer in progress before restoring state -
+      // don't clear the interval on this branch, only on the one below.
+      if (skipCooldown.isHolding()) return;
       clearInterval(countdownTimer);
       btn.disabled = false;
       skipCooldown.hide();
