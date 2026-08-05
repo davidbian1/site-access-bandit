@@ -46,6 +46,46 @@ rejection of shared weights. **Not documented:** whether a shared/hybrid
 model (e.g. site identity as a feature, or a warm-start from other sites'
 weights) was considered and rejected, or just deferred.
 
+## Discount factor — adapting when the bandit's own decisions change behavior
+
+Added deliberately, with a clear reason (unlike most of the sections
+above, this one isn't reconstructed after the fact — it's documented as
+it was decided): vanilla LinUCB accumulates `A`/`b` forever, so a data
+point matters exactly as much a year later as it did the day it
+happened. That's a reasonable assumption if the environment is
+stationary, but it isn't necessarily here — the bandit's own decisions
+are part of what shapes future behavior around a site. A run of denials
+at some hour might genuinely change when access gets requested again; a
+run of grants might change how often it does. This isn't adversarial
+gaming of the model — it's the ordinary feedback loop of a tool that
+intervenes in behavior and then keeps learning from the behavior it
+already influenced. A model that never forgets can't track a shift like
+that; it stays anchored to however things looked before the shift, for
+as long as that older data keeps outweighing the new.
+
+`LinUCBArm.update()` (`lib/linucb.js`) now discounts each arm's `A` and
+`b` by `gamma` before folding in a new observation:
+
+```
+A = gamma * A + (1 - gamma) * I + x xᵀ
+b = gamma * b + x * reward
+```
+
+The `(1 - gamma) * I` term matters: without it, the ridge regularization
+from the initial identity matrix would decay away along with the
+discounted data, risking a poorly-conditioned `A` after enough rounds.
+Re-adding it every step means the regularization settles at a steady
+state of exactly `I` instead of vanishing, so `A` stays safely
+invertible no matter how long the bandit runs.
+
+`discountFactor` (default 0.99, editable on the options page) gives an
+effective memory of roughly `1/(1-gamma) ≈ 100` observations — long
+enough that ordinary day-to-day noise doesn't dominate the estimate,
+short enough that a real, sustained change in behavior shows up within
+weeks of typical use rather than months. `gamma = 1.0` disables
+discounting entirely and reproduces the original, undiscounted behavior
+exactly (verified in `lib/linucb.test.js`).
+
 ## Context vector design — cyclical time encoding + recent-usage stats
 
 `buildContext()` in `lib/config.js` builds a 7-dimensional vector: a bias
@@ -107,6 +147,34 @@ The stated intent: the bandit's baseline preference is always toward
 denying — a grant arm can only ever "lose less" in a given context,
 never accumulate a positive score of its own. Access has to be earned
 back per-context by costing less, not by being rewarded.
+
+## Data integrity — not training on a session with a monitoring gap
+
+Also added deliberately, for the same reason discounting was: bad
+training data is worse than no training data. Active-time tracking
+depends entirely on the service worker actually running — a
+`chrome.alarms` tick every 30 seconds while a grant is active. If the
+extension is disabled mid-grant, tracking stops immediately and the site
+becomes completely unrestricted for as long as it stays disabled, but
+`grant.activeSeconds` freezes at whatever it was the moment tracking
+stopped. Whenever that grant eventually gets finalized, computing a
+reward from that frozen number would understate real usage and feed the
+model an artificially lenient signal for that context — training it,
+in effect, on a number that was never true.
+
+`isGrantStale()` (`lib/background-helpers.js`) flags a grant discovered
+more than `STALE_GRANT_THRESHOLD_MIN` (5 min) past its own `expiresAt` —
+alarms can legitimately run a little late under normal operation, but
+landing minutes past deadline means the service worker plainly wasn't
+running to catch it on time. `finalizeSession()` checks this before
+touching the bandit: a stale session is still logged, visibly marked in
+the options page's session history, but excluded from the reward update
+entirely rather than trained on with a number known to be wrong.
+`handleRequestAccess()` also checks for a stale grant before treating an
+existing one as still active — otherwise a grant whose expire alarm was
+missed entirely (not just late, but never delivered) would leave that
+site stuck in "already granted" indefinitely, with the bandit never
+getting to decide for it again.
 
 ## Per-navigation re-gating (no implicit free-roam window)
 
