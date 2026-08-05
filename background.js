@@ -2,6 +2,7 @@ import { LinUCB, FEATURE_DIM } from './lib/linucb.js';
 import {
   TICK_PERIOD_MIN,
   MAX_SESSIONS_LOGGED,
+  STALE_GRANT_THRESHOLD_MIN,
   defaultSettings,
   hostnameFromUrl,
   buildContext,
@@ -13,7 +14,7 @@ import {
   applyTrustDiscount,
   consumeGrace,
 } from './lib/config.js';
-import { escapeRegex, ruleIdFor, makeGrant, recentStatsFor } from './lib/background-helpers.js';
+import { escapeRegex, ruleIdFor, makeGrant, recentStatsFor, isGrantStale } from './lib/background-helpers.js';
 
 const TICK_ALARM = 'tick';
 
@@ -56,12 +57,12 @@ async function setStore(partial) {
   await chrome.storage.local.set(partial);
 }
 
-function getBandit(banditState, hostname, alpha, nArms) {
+function getBandit(banditState, hostname, alpha, gamma, nArms) {
   const saved = banditState[hostname];
   // If the arm count changed (user edited arm durations in settings), the old
   // per-arm state no longer lines up with the new arms — start fresh for this site.
-  if (saved && saved.arms.length === nArms) return LinUCB.fromJSON({ ...saved, alpha });
-  return new LinUCB(nArms, FEATURE_DIM, alpha);
+  if (saved && saved.arms.length === nArms) return LinUCB.fromJSON({ ...saved, alpha, gamma });
+  return new LinUCB(nArms, FEATURE_DIM, alpha, gamma);
 }
 
 // ---- declarativeNetRequest rule management ----------------------------
@@ -223,25 +224,42 @@ async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}
   const grant = store.grants[hostname];
   if (!grant) return;
 
+  const now = Date.now();
   const activeMinutes = grant.activeSeconds / 60;
   // Counts prior sessions only — this one hasn't been pushed to store.sessions yet.
-  const recent = recentStatsFor(store.sessions, hostname, Date.now(), store.settings.frequencyWindowMin);
+  const recent = recentStatsFor(store.sessions, hostname, now, store.settings.frequencyWindowMin);
   const reward = computeGrantReward(activeMinutes, recent.sessionsInFrequencyWindow, !!grant.overridden, store.settings);
 
-  const bandit = getBandit(store.banditState, hostname, store.settings.alpha, store.settings.armDurationsMin.length);
-  bandit.update(grant.armIndex, grant.context, reward);
-  store.banditState[hostname] = bandit.toJSON();
+  // A grant discovered long past its own expiresAt means the service worker
+  // wasn't running to track it accurately for some stretch of that window
+  // (almost always: the extension was disabled) — activeSeconds is
+  // undercounted, so the reward computed from it is too lenient. Still log
+  // the session for visibility, but don't let a corrupted number train the
+  // model — see isGrantStale in lib/background-helpers.js.
+  const stale = isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN);
+  if (!stale) {
+    const bandit = getBandit(
+      store.banditState,
+      hostname,
+      store.settings.alpha,
+      store.settings.discountFactor,
+      store.settings.armDurationsMin.length
+    );
+    bandit.update(grant.armIndex, grant.context, reward);
+    store.banditState[hostname] = bandit.toJSON();
+  }
 
   store.sessions.push({
     hostname,
     armIndex: grant.armIndex,
     durationMin: grant.durationMin,
     grantedAt: grant.grantedAt,
-    endedAt: Date.now(),
+    endedAt: now,
     activeMinutes,
     reward,
     decision: 'grant',
     endReason,
+    stale,
   });
   if (store.sessions.length > MAX_SESSIONS_LOGGED) {
     store.sessions = store.sessions.slice(-MAX_SESSIONS_LOGGED);
@@ -255,7 +273,6 @@ async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}
   // that costs the same wait-and-hold effort an override does. It's an
   // offer, not a grant — nothing changes until EXTEND_SESSION is actually
   // used.
-  const now = Date.now();
   if (!grant.overridden && !grant.extended && activeMinutes >= store.settings.extremeLongFormMin) {
     store.extendEligible[hostname] = {
       context: grant.context,
@@ -314,7 +331,13 @@ async function handleExpiry(hostname) {
     fresh.settings.overrideWindowMin
   );
   const context = buildContext(new Date(now), recent);
-  const bandit = getBandit(fresh.banditState, hostname, fresh.settings.alpha, fresh.settings.armDurationsMin.length);
+  const bandit = getBandit(
+    fresh.banditState,
+    hostname,
+    fresh.settings.alpha,
+    fresh.settings.discountFactor,
+    fresh.settings.armDurationsMin.length
+  );
   const { armIndex } = bandit.selectArm(context);
   const durationMin = fresh.settings.armDurationsMin[armIndex];
 
@@ -360,11 +383,22 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // ---- core decision logic -------------------------------------------------
 
 async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false } = {}) {
-  const store = await getStore();
+  let store = await getStore();
   const now = Date.now();
 
   if (store.grants[hostname]) {
-    return { granted: true, durationMin: store.grants[hostname].durationMin, targetUrl, alreadyGranted: true };
+    if (isGrantStale(store.grants[hostname], now, STALE_GRANT_THRESHOLD_MIN)) {
+      // The expire alarm that should have finalized this never fired in
+      // time — most likely the extension was disabled while it was active.
+      // Finalize it now (untrained, since its activeSeconds can't be
+      // trusted — see finalizeSession) instead of treating a long-dead
+      // grant as still live, which would otherwise block every future
+      // decision for this site indefinitely.
+      await finalizeSession(hostname, 'expired');
+      store = await getStore();
+    } else {
+      return { granted: true, durationMin: store.grants[hostname].durationMin, targetUrl, alreadyGranted: true };
+    }
   }
 
   const recent = recentStatsFor(
@@ -384,7 +418,13 @@ async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false }
   store.lastRequestAt[hostname] = now;
 
   const context = buildContext(new Date(now), recent);
-  const bandit = getBandit(store.banditState, hostname, store.settings.alpha, store.settings.armDurationsMin.length);
+  const bandit = getBandit(
+    store.banditState,
+    hostname,
+    store.settings.alpha,
+    store.settings.discountFactor,
+    store.settings.armDurationsMin.length
+  );
   const { armIndex, scores } = bandit.selectArm(context);
   const durationMin = store.settings.armDurationsMin[armIndex];
 
@@ -472,7 +512,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Retroactively penalize the deny decision that was just made — this
         // is the only signal that can ever correct a wrongful denial, since
         // there's no way to tell from context alone that this one mattered.
-        const bandit = getBandit(store.banditState, hostname, store.settings.alpha, store.settings.armDurationsMin.length);
+        const bandit = getBandit(
+          store.banditState,
+          hostname,
+          store.settings.alpha,
+          store.settings.discountFactor,
+          store.settings.armDurationsMin.length
+        );
         bandit.update(denySession.armIndex, denySession.context, -store.settings.denyOverridePenalty);
         store.banditState[hostname] = bandit.toJSON();
         denySession.overridden = true;
@@ -673,7 +719,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const now = Date.now();
         const recent = recentStatsFor(store.sessions, msg.hostname, now);
         const context = buildContext(new Date(), recent);
-        const bandit = getBandit(store.banditState, msg.hostname, store.settings.alpha, store.settings.armDurationsMin.length);
+        const bandit = getBandit(
+          store.banditState,
+          msg.hostname,
+          store.settings.alpha,
+          store.settings.discountFactor,
+          store.settings.armDurationsMin.length
+        );
         const scores = bandit.arms.map((a, i) => ({ durationMin: store.settings.armDurationsMin[i], ...a.score(context, store.settings.alpha) }));
         sendResponse({ context, scores, trust: trustFor(store, msg.hostname, now) });
         break;
