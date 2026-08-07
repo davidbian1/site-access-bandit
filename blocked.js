@@ -19,7 +19,7 @@ function goToTarget() {
 // Shared press-and-hold interaction: a button that requires a sustained hold
 // (not a click) to fire, with a visible fill animation, so it can't be
 // tapped through on reflex. Used for override, extend, and skip-cooldown.
-function makeHoldButton(el, { label, onFire }) {
+function makeHoldButton(el, { label, onFire, onHoldStart }) {
   const fill = el.querySelector('.hold-fill');
   const labelEl = el.querySelector('.label');
   let holdMs = 3000;
@@ -53,6 +53,7 @@ function makeHoldButton(el, { label, onFire }) {
     holdTimer = setTimeout(() => {
       if (holding) fire();
     }, holdMs);
+    if (onHoldStart) onHoldStart();
   }
 
   async function fire() {
@@ -142,6 +143,15 @@ function armOverrideButton(delaySec, holdMs) {
 const skipCooldownBtn = document.getElementById('skipCooldownBtn');
 const skipCooldown = makeHoldButton(skipCooldownBtn, {
   label: 'Hold to ask now',
+  // The countdown interval below re-renders "You just asked — try again in
+  // Xs" every 250ms independent of whether a hold is in progress. Without
+  // this, that message keeps contradicting the button's own fill animation
+  // for the entire hold — it visibly fills while the text right above it
+  // keeps insisting you're still just waiting, which reads as "this isn't
+  // doing anything" even though the hold itself is working correctly.
+  onHoldStart: () => {
+    status.textContent = 'Asking now — keep holding…';
+  },
   onFire: async () => {
     clearInterval(countdownTimer);
     skipCooldown.hide();
@@ -171,7 +181,13 @@ function startCooldownCountdown(retryAtMs, cooldownHoldMs) {
       status.textContent = '';
       return;
     }
-    status.textContent = `You just asked — try again in ${Math.ceil(remaining / 1000)}s, or hold below to ask now anyway`;
+    // Don't stomp over the "keep holding…" message from onHoldStart while a
+    // hold is actually in progress — this message and that one would
+    // otherwise alternate every 250ms, undercutting the fill animation's
+    // own effort feedback.
+    if (!skipCooldown.isHolding()) {
+      status.textContent = `You just asked — try again in ${Math.ceil(remaining / 1000)}s, or hold below to ask now anyway`;
+    }
   }, 250);
 }
 
