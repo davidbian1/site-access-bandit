@@ -4,3 +4,7 @@ node_modules/
 Thumbs.db
 DESIGN_DECISIONS.md
 AUDIT.md
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
