@@ -461,6 +461,95 @@ async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false }
   return { granted: true, durationMin, targetUrl, scores };
 }
 
+// There's no way to tell from context alone whether a denial blocked
+// mindless scrolling or something genuinely needed — only the retroactive
+// penalty on the deny decision, plus a grant and a grace/trust bump, can
+// correct a wrongful denial after the fact. See the override wait/hold
+// mechanics in blocked.js for the effort required to reach this at all.
+async function handleOverrideDeny(hostname, targetUrl) {
+  const store = await getStore();
+  const denySession = [...store.sessions]
+    .reverse()
+    .find((s) => s.hostname === hostname && s.decision === 'deny' && !s.overridden && s.context);
+
+  if (!denySession) {
+    return { ok: false, error: 'no recent denial to override' };
+  }
+
+  const bandit = getBanditFor(store, hostname);
+  bandit.update(denySession.armIndex, denySession.context, -store.settings.denyOverridePenalty);
+  store.banditState[hostname] = bandit.toJSON();
+  denySession.overridden = true;
+  denySession.reward = -store.settings.denyOverridePenalty;
+
+  // Grant the smallest available duration anyway.
+  const overrideArmIndex = store.settings.armDurationsMin.findIndex((d) => d > 0);
+  const armIndex = overrideArmIndex >= 0 ? overrideArmIndex : 0;
+  const durationMin = overrideArmIndex >= 0 ? store.settings.armDurationsMin[overrideArmIndex] : 5;
+  const now = Date.now();
+  store.grants[hostname] = makeGrant(armIndex, durationMin, denySession.context, now, targetUrl || denySession.targetUrl, {
+    overridden: true,
+  });
+  // The effort of getting through the wait and the hold should buy more
+  // than the one page it was spent on — suspend per-navigation re-gating
+  // on this site for a grace window afterward. The hop count is generous
+  // enough that this behaves like free browsing for the window's duration
+  // in practice (see consumeGrace).
+  store.grace[hostname] = { expiresAt: now + minutesToMs(store.settings.overrideGraceMin), hopsRemaining: store.settings.overrideGraceHopCount };
+
+  // Bank trust credit too, so near-future access on this site stays easier
+  // for a while after the grace window itself lapses — decaying gradually
+  // (decayedTrust) rather than snapping back to full friction the instant
+  // grace ends.
+  const priorTrust = trustFor(store, hostname, now);
+  store.trust[hostname] = { value: Math.min(1, priorTrust + store.settings.trustOverrideBoost), updatedAt: now };
+
+  await setStore({
+    banditState: store.banditState,
+    sessions: store.sessions,
+    grants: store.grants,
+    grace: store.grace,
+    trust: store.trust,
+  });
+  await scheduleGrantEnforcement(hostname, store.grants[hostname]);
+
+  return { granted: true, durationMin, targetUrl: store.grants[hostname].targetUrl, overridden: true };
+}
+
+// Reuses the largest configured arm so the bandit still learns from this
+// session like any other grant — extending isn't correcting a wrong
+// decision the way an override is, so it doesn't carry the extra
+// overrideSessionPenalty; the duration penalty on a deliberately long
+// grant already reflects its cost.
+async function handleExtendSession(hostname, targetUrl) {
+  const store = await getStore();
+  const now = Date.now();
+  const eligible = store.extendEligible[hostname];
+
+  if (!eligible || now >= eligible.expiresAt) {
+    return { ok: false, error: 'no extend offer available' };
+  }
+  delete store.extendEligible[hostname];
+
+  const armIndex = store.settings.armDurationsMin.length - 1;
+  const durationMin = store.settings.extendGrantMin;
+  store.grants[hostname] = makeGrant(armIndex, durationMin, eligible.context, now, targetUrl, { extended: true });
+
+  // The point of spending the effort: skip the redirect that's about to
+  // happen. The credit is deliberately scarce — a handful of hops at most,
+  // diminishing with every one spent (see consumeGrace) — unlike
+  // override's grace, which is generous enough to feel like free browsing.
+  store.grace[hostname] = {
+    expiresAt: now + minutesToMs(store.settings.extendGraceMin),
+    hopsRemaining: store.settings.extendHopCount,
+  };
+
+  await setStore({ grants: store.grants, grace: store.grace, extendEligible: store.extendEligible });
+  await scheduleGrantEnforcement(hostname, store.grants[hostname]);
+
+  return { granted: true, durationMin, targetUrl };
+}
+
 // ---- messaging ------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -488,95 +577,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case 'OVERRIDE_DENY': {
-        const store = await getStore();
-        const hostname = msg.hostname;
-        const denySession = [...store.sessions]
-          .reverse()
-          .find((s) => s.hostname === hostname && s.decision === 'deny' && !s.overridden && s.context);
-
-        if (!denySession) {
-          sendResponse({ ok: false, error: 'no recent denial to override' });
-          break;
-        }
-
-        // Retroactively penalize the deny decision that was just made — this
-        // is the only signal that can ever correct a wrongful denial, since
-        // there's no way to tell from context alone that this one mattered.
-        const bandit = getBanditFor(store, hostname);
-        bandit.update(denySession.armIndex, denySession.context, -store.settings.denyOverridePenalty);
-        store.banditState[hostname] = bandit.toJSON();
-        denySession.overridden = true;
-        denySession.reward = -store.settings.denyOverridePenalty;
-
-        // Grant the smallest available duration anyway.
-        const overrideArmIndex = store.settings.armDurationsMin.findIndex((d) => d > 0);
-        const armIndex = overrideArmIndex >= 0 ? overrideArmIndex : 0;
-        const durationMin = overrideArmIndex >= 0 ? store.settings.armDurationsMin[overrideArmIndex] : 5;
-        const now = Date.now();
-        store.grants[hostname] = makeGrant(armIndex, durationMin, denySession.context, now, msg.targetUrl || denySession.targetUrl, {
-          overridden: true,
-        });
-        // The effort of getting through the wait and the hold should buy more
-        // than the one page it was spent on — suspend per-navigation
-        // re-gating on this site for a grace window afterward. The hop count
-        // is generous enough that this behaves like free browsing for the
-        // window's duration in practice (see consumeGrace).
-        store.grace[hostname] = { expiresAt: now + minutesToMs(store.settings.overrideGraceMin), hopsRemaining: store.settings.overrideGraceHopCount };
-
-        // Bank trust credit too, so near-future access on this site stays
-        // easier for a while after the grace window itself lapses — decaying
-        // gradually (decayedTrust) rather than snapping back to full
-        // friction the instant grace ends.
-        const priorTrust = trustFor(store, hostname, now);
-        store.trust[hostname] = { value: Math.min(1, priorTrust + store.settings.trustOverrideBoost), updatedAt: now };
-
-        await setStore({
-          banditState: store.banditState,
-          sessions: store.sessions,
-          grants: store.grants,
-          grace: store.grace,
-          trust: store.trust,
-        });
-        await scheduleGrantEnforcement(hostname, store.grants[hostname]);
-
-        sendResponse({ granted: true, durationMin, targetUrl: store.grants[hostname].targetUrl, overridden: true });
+        const result = await handleOverrideDeny(msg.hostname, msg.targetUrl);
+        sendResponse(result);
         break;
       }
       case 'EXTEND_SESSION': {
-        const store = await getStore();
-        const hostname = msg.hostname;
-        const now = Date.now();
-        const eligible = store.extendEligible[hostname];
-
-        if (!eligible || now >= eligible.expiresAt) {
-          sendResponse({ ok: false, error: 'no extend offer available' });
-          break;
-        }
-        delete store.extendEligible[hostname];
-
-        // Reuses the largest configured arm so the bandit still learns from
-        // this session like any other grant — extending isn't correcting a
-        // wrong decision the way an override is, so it doesn't carry the
-        // extra overrideSessionPenalty; the duration penalty on a
-        // deliberately long grant already reflects its cost.
-        const armIndex = store.settings.armDurationsMin.length - 1;
-        const durationMin = store.settings.extendGrantMin;
-        store.grants[hostname] = makeGrant(armIndex, durationMin, eligible.context, now, msg.targetUrl, { extended: true });
-
-        // The point of spending the effort: skip the redirect that's about
-        // to happen. The credit is deliberately scarce — a handful of hops
-        // at most, diminishing with every one spent (see consumeGrace) —
-        // unlike override's grace, which is generous enough to feel like
-        // free browsing.
-        store.grace[hostname] = {
-          expiresAt: now + minutesToMs(store.settings.extendGraceMin),
-          hopsRemaining: store.settings.extendHopCount,
-        };
-
-        await setStore({ grants: store.grants, grace: store.grace, extendEligible: store.extendEligible });
-        await scheduleGrantEnforcement(hostname, store.grants[hostname]);
-
-        sendResponse({ granted: true, durationMin, targetUrl: msg.targetUrl });
+        const result = await handleExtendSession(msg.hostname, msg.targetUrl);
+        sendResponse(result);
         break;
       }
       case 'GET_EXTEND_ELIGIBILITY': {
