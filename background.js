@@ -554,165 +554,176 @@ async function handleExtendSession(hostname, targetUrl) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    switch (msg.type) {
-      case 'REQUEST_ACCESS': {
-        const result = await handleRequestAccess(msg.hostname, msg.targetUrl);
-        sendResponse(result);
-        break;
-      }
-      case 'OVERRIDE_COOLDOWN': {
-        // The cooldown wait, not a denial, was the thing standing between
-        // you and asking — spending effort (a hold, no separate delay: the
-        // wait itself is exactly what this replaces) skips straight to a
-        // real, fair decision instead of leaving "disable the extension" as
-        // the only way around it. Still goes through the normal bandit
-        // decision — this doesn't guarantee access, just the chance to ask.
-        const result = await handleRequestAccess(msg.hostname, msg.targetUrl, { skipCooldown: true });
-        sendResponse(result);
-        break;
-      }
-      case 'END_SESSION': {
-        await finalizeSession(msg.hostname, msg.reason || 'manual');
-        sendResponse({ ok: true });
-        break;
-      }
-      case 'OVERRIDE_DENY': {
-        const result = await handleOverrideDeny(msg.hostname, msg.targetUrl);
-        sendResponse(result);
-        break;
-      }
-      case 'EXTEND_SESSION': {
-        const result = await handleExtendSession(msg.hostname, msg.targetUrl);
-        sendResponse(result);
-        break;
-      }
-      case 'GET_EXTEND_ELIGIBILITY': {
-        const store = await getStore();
-        const eligible = store.extendEligible[msg.hostname];
-        const now = Date.now();
-        sendResponse({ eligible: !!(eligible && now < eligible.expiresAt), holdMs: store.settings.overrideHoldMs });
-        break;
-      }
-      case 'ADD_SITE': {
-        const store = await getStore();
-        if (!store.sites.some((s) => s.hostname === msg.hostname)) {
-          store.sites.push({ hostname: msg.hostname, addedAt: Date.now() });
-          await setStore({ sites: store.sites });
+    try {
+      switch (msg.type) {
+        case 'REQUEST_ACCESS': {
+          const result = await handleRequestAccess(msg.hostname, msg.targetUrl);
+          sendResponse(result);
+          break;
+        }
+        case 'OVERRIDE_COOLDOWN': {
+          // The cooldown wait, not a denial, was the thing standing between
+          // you and asking — spending effort (a hold, no separate delay: the
+          // wait itself is exactly what this replaces) skips straight to a
+          // real, fair decision instead of leaving "disable the extension" as
+          // the only way around it. Still goes through the normal bandit
+          // decision — this doesn't guarantee access, just the chance to ask.
+          const result = await handleRequestAccess(msg.hostname, msg.targetUrl, { skipCooldown: true });
+          sendResponse(result);
+          break;
+        }
+        case 'END_SESSION': {
+          await finalizeSession(msg.hostname, msg.reason || 'manual');
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'OVERRIDE_DENY': {
+          const result = await handleOverrideDeny(msg.hostname, msg.targetUrl);
+          sendResponse(result);
+          break;
+        }
+        case 'EXTEND_SESSION': {
+          const result = await handleExtendSession(msg.hostname, msg.targetUrl);
+          sendResponse(result);
+          break;
+        }
+        case 'GET_EXTEND_ELIGIBILITY': {
+          const store = await getStore();
+          const eligible = store.extendEligible[msg.hostname];
+          const now = Date.now();
+          sendResponse({ eligible: !!(eligible && now < eligible.expiresAt), holdMs: store.settings.overrideHoldMs });
+          break;
+        }
+        case 'ADD_SITE': {
+          const store = await getStore();
+          if (!store.sites.some((s) => s.hostname === msg.hostname)) {
+            store.sites.push({ hostname: msg.hostname, addedAt: Date.now() });
+            await setStore({ sites: store.sites });
+            await rebuildBlockRules();
+            await rebuildContentScripts();
+            await injectIntoOpenTabs(msg.hostname);
+          }
+          sendResponse({ ok: true, sites: store.sites });
+          break;
+        }
+        case 'REMOVE_SITE': {
+          const store = await getStore();
+          store.sites = store.sites.filter((s) => s.hostname !== msg.hostname);
+          delete store.grants[msg.hostname];
+          delete store.grace[msg.hostname];
+          delete store.trust[msg.hostname];
+          delete store.extendEligible[msg.hostname];
+          await setStore({
+            sites: store.sites,
+            grants: store.grants,
+            grace: store.grace,
+            trust: store.trust,
+            extendEligible: store.extendEligible,
+          });
+          await chrome.alarms.clear(`expire:${msg.hostname}`);
           await rebuildBlockRules();
           await rebuildContentScripts();
-          await injectIntoOpenTabs(msg.hostname);
+          sendResponse({ ok: true, sites: store.sites });
+          break;
         }
-        sendResponse({ ok: true, sites: store.sites });
-        break;
-      }
-      case 'REMOVE_SITE': {
-        const store = await getStore();
-        store.sites = store.sites.filter((s) => s.hostname !== msg.hostname);
-        delete store.grants[msg.hostname];
-        delete store.grace[msg.hostname];
-        delete store.trust[msg.hostname];
-        delete store.extendEligible[msg.hostname];
-        await setStore({
-          sites: store.sites,
-          grants: store.grants,
-          grace: store.grace,
-          trust: store.trust,
-          extendEligible: store.extendEligible,
-        });
-        await chrome.alarms.clear(`expire:${msg.hostname}`);
-        await rebuildBlockRules();
-        await rebuildContentScripts();
-        sendResponse({ ok: true, sites: store.sites });
-        break;
-      }
-      case 'CHECK_ACCESS': {
-        const store = await getStore();
-        const now = Date.now();
-        const hasGrant = !!store.grants[msg.hostname];
-        let inGrace;
-        if (msg.consume) {
-          // A navigation is actually about to spend the credit — decrement
-          // it (see consumeGrace) rather than just checking it, so a grace
-          // window can't be stretched across more hops than it was earned for.
-          const result = consumeGrace(store.grace[msg.hostname], now);
-          inGrace = result.allowed;
-          if (result.allowed) {
-            if (result.next) store.grace[msg.hostname] = result.next;
-            else delete store.grace[msg.hostname];
-            await setStore({ grace: store.grace });
+        case 'CHECK_ACCESS': {
+          const store = await getStore();
+          const now = Date.now();
+          const hasGrant = !!store.grants[msg.hostname];
+          let inGrace;
+          if (msg.consume) {
+            // A navigation is actually about to spend the credit — decrement
+            // it (see consumeGrace) rather than just checking it, so a grace
+            // window can't be stretched across more hops than it was earned for.
+            const result = consumeGrace(store.grace[msg.hostname], now);
+            inGrace = result.allowed;
+            if (result.allowed) {
+              if (result.next) store.grace[msg.hostname] = result.next;
+              else delete store.grace[msg.hostname];
+              await setStore({ grace: store.grace });
+            }
+          } else {
+            // Non-destructive peek (e.g. initial page load) — don't spend a hop
+            // just for checking whether the page should load at all.
+            const entry = store.grace[msg.hostname];
+            inGrace = !!(entry && now < entry.expiresAt && entry.hopsRemaining > 0);
           }
-        } else {
-          // Non-destructive peek (e.g. initial page load) — don't spend a hop
-          // just for checking whether the page should load at all.
-          const entry = store.grace[msg.hostname];
-          inGrace = !!(entry && now < entry.expiresAt && entry.hopsRemaining > 0);
+          // `granted` covers a normal page-level grant OR an active grace
+          // credit — either lets a freshly loaded page through. `grace` is
+          // reported separately: only it should suspend per-navigation
+          // re-gating on the *next* click; a plain grant existing shouldn't,
+          // since every new navigation still needs its own decision by default.
+          sendResponse({ granted: hasGrant || inGrace, grace: inGrace });
+          break;
         }
-        // `granted` covers a normal page-level grant OR an active grace
-        // credit — either lets a freshly loaded page through. `grace` is
-        // reported separately: only it should suspend per-navigation
-        // re-gating on the *next* click; a plain grant existing shouldn't,
-        // since every new navigation still needs its own decision by default.
-        sendResponse({ granted: hasGrant || inGrace, grace: inGrace });
-        break;
+        case 'GET_STATUS': {
+          const store = await getStore();
+          const now = Date.now();
+          const grant = store.grants[msg.hostname];
+          const isManaged = store.sites.some((s) => s.hostname === msg.hostname);
+          const recent = recentStatsFor(store.sessions, msg.hostname, now);
+          const trust = trustFor(store, msg.hostname, now);
+          const cooldownMs = applyTrustDiscount(computeCooldownSec(recent.avgRecentActiveMin, store.settings), trust, store.settings) * 1000;
+          const last = store.lastRequestAt[msg.hostname] || 0;
+          sendResponse({
+            isManaged,
+            grant: grant ? { ...grant, remainingMs: grant.expiresAt - Date.now() } : null,
+            cooldownRemainingMs: Math.max(0, last + cooldownMs - Date.now()),
+            sites: store.sites,
+          });
+          break;
+        }
+        case 'GET_SESSIONS': {
+          const store = await getStore();
+          sendResponse({ sessions: store.sessions.slice().reverse() });
+          break;
+        }
+        case 'GET_SETTINGS': {
+          const store = await getStore();
+          sendResponse({ settings: store.settings });
+          break;
+        }
+        case 'SET_SETTINGS': {
+          const store = await getStore();
+          await setStore({ settings: { ...store.settings, ...msg.settings } });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'RESET_BANDIT': {
+          const store = await getStore();
+          if (msg.hostname) delete store.banditState[msg.hostname];
+          else store.banditState = {};
+          await setStore({ banditState: store.banditState });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'CLEAR_SESSIONS': {
+          await setStore({ sessions: [] });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'GET_BANDIT_DEBUG': {
+          const store = await getStore();
+          const now = Date.now();
+          const recent = recentStatsFor(store.sessions, msg.hostname, now);
+          const context = buildContext(new Date(), recent);
+          const bandit = getBanditFor(store, msg.hostname);
+          const scores = bandit.arms.map((a, i) => ({ durationMin: store.settings.armDurationsMin[i], ...a.score(context, store.settings.alpha) }));
+          sendResponse({ context, scores, trust: trustFor(store, msg.hostname, now) });
+          break;
+        }
+        default:
+          sendResponse({ error: `unknown message type ${msg.type}` });
       }
-      case 'GET_STATUS': {
-        const store = await getStore();
-        const now = Date.now();
-        const grant = store.grants[msg.hostname];
-        const isManaged = store.sites.some((s) => s.hostname === msg.hostname);
-        const recent = recentStatsFor(store.sessions, msg.hostname, now);
-        const trust = trustFor(store, msg.hostname, now);
-        const cooldownMs = applyTrustDiscount(computeCooldownSec(recent.avgRecentActiveMin, store.settings), trust, store.settings) * 1000;
-        const last = store.lastRequestAt[msg.hostname] || 0;
-        sendResponse({
-          isManaged,
-          grant: grant ? { ...grant, remainingMs: grant.expiresAt - Date.now() } : null,
-          cooldownRemainingMs: Math.max(0, last + cooldownMs - Date.now()),
-          sites: store.sites,
-        });
-        break;
-      }
-      case 'GET_SESSIONS': {
-        const store = await getStore();
-        sendResponse({ sessions: store.sessions.slice().reverse() });
-        break;
-      }
-      case 'GET_SETTINGS': {
-        const store = await getStore();
-        sendResponse({ settings: store.settings });
-        break;
-      }
-      case 'SET_SETTINGS': {
-        const store = await getStore();
-        await setStore({ settings: { ...store.settings, ...msg.settings } });
-        sendResponse({ ok: true });
-        break;
-      }
-      case 'RESET_BANDIT': {
-        const store = await getStore();
-        if (msg.hostname) delete store.banditState[msg.hostname];
-        else store.banditState = {};
-        await setStore({ banditState: store.banditState });
-        sendResponse({ ok: true });
-        break;
-      }
-      case 'CLEAR_SESSIONS': {
-        await setStore({ sessions: [] });
-        sendResponse({ ok: true });
-        break;
-      }
-      case 'GET_BANDIT_DEBUG': {
-        const store = await getStore();
-        const now = Date.now();
-        const recent = recentStatsFor(store.sessions, msg.hostname, now);
-        const context = buildContext(new Date(), recent);
-        const bandit = getBanditFor(store, msg.hostname);
-        const scores = bandit.arms.map((a, i) => ({ durationMin: store.settings.armDurationsMin[i], ...a.score(context, store.settings.alpha) }));
-        sendResponse({ context, scores, trust: trustFor(store, msg.hostname, now) });
-        break;
-      }
-      default:
-        sendResponse({ error: `unknown message type ${msg.type}` });
+    } catch (err) {
+      // Without this, an exception thrown anywhere above (a rejected
+      // chrome.* call, a bug in a handler) would skip its sendResponse
+      // entirely, and the caller's `await chrome.runtime.sendMessage(...)`
+      // would hang until Chrome eventually reports "the message port
+      // closed" - a stuck "Thinking..."/"Asking..." with no real error
+      // surfaced. Report it immediately instead.
+      console.error(`[background] ${msg.type} failed:`, err);
+      sendResponse({ error: err instanceof Error ? err.message : String(err) });
     }
   })();
   return true; // keep the message channel open for the async response
