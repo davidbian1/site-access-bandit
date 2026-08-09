@@ -1,4 +1,3 @@
-import { LinUCB, FEATURE_DIM } from './lib/linucb.js';
 import {
   TICK_PERIOD_MIN,
   MAX_SESSIONS_LOGGED,
@@ -21,6 +20,7 @@ import {
   recentStatsFor,
   isGrantStale,
   isLongFormEngaged,
+  getBanditFor,
 } from './lib/background-helpers.js';
 
 const TICK_ALARM = 'tick';
@@ -62,14 +62,6 @@ function trustFor(store, hostname, now) {
 
 async function setStore(partial) {
   await chrome.storage.local.set(partial);
-}
-
-function getBandit(banditState, hostname, alpha, gamma, nArms) {
-  const saved = banditState[hostname];
-  // If the arm count changed (user edited arm durations in settings), the old
-  // per-arm state no longer lines up with the new arms — start fresh for this site.
-  if (saved && saved.arms.length === nArms) return LinUCB.fromJSON({ ...saved, alpha, gamma });
-  return new LinUCB(nArms, FEATURE_DIM, alpha, gamma);
 }
 
 // ---- declarativeNetRequest rule management ----------------------------
@@ -245,13 +237,7 @@ async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}
   // model — see isGrantStale in lib/background-helpers.js.
   const stale = isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN);
   if (!stale) {
-    const bandit = getBandit(
-      store.banditState,
-      hostname,
-      store.settings.alpha,
-      store.settings.discountFactor,
-      store.settings.armDurationsMin.length
-    );
+    const bandit = getBanditFor(store, hostname);
     bandit.update(grant.armIndex, grant.context, reward);
     store.banditState[hostname] = bandit.toJSON();
   }
@@ -338,13 +324,7 @@ async function handleExpiry(hostname) {
     fresh.settings.overrideWindowMin
   );
   const context = buildContext(new Date(now), recent);
-  const bandit = getBandit(
-    fresh.banditState,
-    hostname,
-    fresh.settings.alpha,
-    fresh.settings.discountFactor,
-    fresh.settings.armDurationsMin.length
-  );
+  const bandit = getBanditFor(fresh, hostname);
   const { armIndex } = bandit.selectArm(context);
   const durationMin = fresh.settings.armDurationsMin[armIndex];
 
@@ -425,13 +405,7 @@ async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false }
   store.lastRequestAt[hostname] = now;
 
   const context = buildContext(new Date(now), recent);
-  const bandit = getBandit(
-    store.banditState,
-    hostname,
-    store.settings.alpha,
-    store.settings.discountFactor,
-    store.settings.armDurationsMin.length
-  );
+  const bandit = getBanditFor(store, hostname);
   const { armIndex, scores } = bandit.selectArm(context);
   const durationMin = store.settings.armDurationsMin[armIndex];
 
@@ -519,13 +493,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Retroactively penalize the deny decision that was just made — this
         // is the only signal that can ever correct a wrongful denial, since
         // there's no way to tell from context alone that this one mattered.
-        const bandit = getBandit(
-          store.banditState,
-          hostname,
-          store.settings.alpha,
-          store.settings.discountFactor,
-          store.settings.armDurationsMin.length
-        );
+        const bandit = getBanditFor(store, hostname);
         bandit.update(denySession.armIndex, denySession.context, -store.settings.denyOverridePenalty);
         store.banditState[hostname] = bandit.toJSON();
         denySession.overridden = true;
@@ -726,13 +694,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const now = Date.now();
         const recent = recentStatsFor(store.sessions, msg.hostname, now);
         const context = buildContext(new Date(), recent);
-        const bandit = getBandit(
-          store.banditState,
-          msg.hostname,
-          store.settings.alpha,
-          store.settings.discountFactor,
-          store.settings.armDurationsMin.length
-        );
+        const bandit = getBanditFor(store, msg.hostname);
         const scores = bandit.arms.map((a, i) => ({ durationMin: store.settings.armDurationsMin[i], ...a.score(context, store.settings.alpha) }));
         sendResponse({ context, scores, trust: trustFor(store, msg.hostname, now) });
         break;
