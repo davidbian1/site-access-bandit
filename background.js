@@ -164,6 +164,18 @@ async function ensureTickAlarm() {
   if (!existing) chrome.alarms.create(TICK_ALARM, { periodInMinutes: TICK_PERIOD_MIN });
 }
 
+// Every place that activates a grant (a fresh decision, an override, an
+// extend, a long-form renewal) needs the same three follow-up steps in the
+// same order: unblock the site, make sure the tick alarm is running to
+// track active time, and schedule the alarm that'll eventually finalize
+// this grant. Centralizing it means those three steps can't drift out of
+// sync at one call site without the others.
+async function scheduleGrantEnforcement(hostname, grant) {
+  await rebuildBlockRules();
+  await ensureTickAlarm();
+  chrome.alarms.create(`expire:${hostname}`, { when: grant.expiresAt });
+}
+
 async function maybeStopTickAlarm() {
   const { grants } = await getStore();
   if (Object.keys(grants).length === 0) chrome.alarms.clear(TICK_ALARM);
@@ -354,9 +366,7 @@ async function handleExpiry(hostname) {
 
   fresh.grants[hostname] = makeGrant(armIndex, durationMin, context, now, activeTab.url);
   await setStore({ grants: fresh.grants });
-  await rebuildBlockRules();
-  await ensureTickAlarm();
-  chrome.alarms.create(`expire:${hostname}`, { when: fresh.grants[hostname].expiresAt });
+  await scheduleGrantEnforcement(hostname, fresh.grants[hostname]);
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -445,9 +455,7 @@ async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false }
 
   store.grants[hostname] = makeGrant(armIndex, durationMin, context, now, targetUrl);
   await setStore({ grants: store.grants, lastRequestAt: store.lastRequestAt });
-  await rebuildBlockRules();
-  await ensureTickAlarm();
-  chrome.alarms.create(`expire:${hostname}`, { when: store.grants[hostname].expiresAt });
+  await scheduleGrantEnforcement(hostname, store.grants[hostname]);
 
   return { granted: true, durationMin, targetUrl, scores };
 }
@@ -528,9 +536,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           grace: store.grace,
           trust: store.trust,
         });
-        await rebuildBlockRules();
-        await ensureTickAlarm();
-        chrome.alarms.create(`expire:${hostname}`, { when: store.grants[hostname].expiresAt });
+        await scheduleGrantEnforcement(hostname, store.grants[hostname]);
 
         sendResponse({ granted: true, durationMin, targetUrl: store.grants[hostname].targetUrl, overridden: true });
         break;
@@ -567,9 +573,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         };
 
         await setStore({ grants: store.grants, grace: store.grace, extendEligible: store.extendEligible });
-        await rebuildBlockRules();
-        await ensureTickAlarm();
-        chrome.alarms.create(`expire:${hostname}`, { when: store.grants[hostname].expiresAt });
+        await scheduleGrantEnforcement(hostname, store.grants[hostname]);
 
         sendResponse({ granted: true, durationMin, targetUrl: msg.targetUrl });
         break;
