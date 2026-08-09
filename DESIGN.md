@@ -37,14 +37,52 @@ rejected.
 
 ## Why a separate model per site (disjoint across sites, not just across arms)
 
-Each managed site gets its own independent `LinUCB` instance — listed
-explicitly under [Known limitations](#known-limitations-mvp-scope)
-below, not framed as a permanent design principle.
+Each managed site still trains its own independent `LinUCB` instance —
+listed explicitly under [Known limitations](#known-limitations-mvp-scope)
+below, not framed as a permanent design principle. That framing turned out
+to matter: it read as a scope cut for v0.1, not a considered rejection of
+shared weights, and a later pass (below) picked it back up rather than
+leaving it as a permanently unexamined gap.
 
-That framing matters: it reads as a scope cut for v0.1, not a considered
-rejection of shared weights. **Not documented:** whether a shared/hybrid
-model (e.g. site identity as a feature, or a warm-start from other sites'
-weights) was considered and rejected, or just deferred.
+**Not documented:** whether a *full* shared/hybrid model (the paper this
+implements, Li et al. 2010, defines one) was ever considered and rejected
+for v0.1, or just deferred. What follows is a narrower fix — one-time
+warm-starting a new site, not ongoing weight sharing — tested rather than
+assumed; see the Open questions section for what's still unaddressed
+beyond it.
+
+## Cross-site warm-start — a new site doesn't have to start from nothing
+
+Added deliberately, and tested in `eval/` before shipping (docs/adr/0002)
+rather than assumed to help: a brand-new managed site used to start with
+`A=I`, `b=0` — pure ignorance — even when other managed sites already had
+plenty of learned data. `crossSiteWarmStart()` in
+`lib/background-helpers.js` initializes a new site instead from a
+shrinkage-weighted average of other sites' *learned* contribution (each
+sibling's `A` minus its own identity baseline, so a site with more data
+doesn't also inject more regularization than a fresh site should start
+with):
+
+```
+A = I + shrinkage * mean(sibling.A - I)
+b = shrinkage * mean(sibling.b)
+```
+
+`crossSiteWarmStartWeight` (default 0.2, editable, 0 fully disables it —
+reproducing the original per-site-independent behavior exactly) applies
+whenever a site has no valid saved state of its own, including a first-ever
+decision or a dimension/arm-count mismatch after a settings change.
+
+The simulation behind this found something worth being honest about:
+warm-starting reduced regret at every shrinkage tested, *including* from
+deliberately dissimilar or fully adversarial (inverted-risk) sibling
+sites — surprising enough that it was stress-tested rather than trusted.
+The working explanation, not confirmed directly: today's reward ceiling
+(see below) makes denying close to correct almost everywhere, so nearly
+any confident prior speeds convergence toward that reward-dominant policy,
+regardless of whether the specific thing borrowed is accurate. That also
+means this finding is coupled to the current reward shape — see ADR 0002
+for what changed when the ceiling was relaxed experimentally.
 
 ## Discount factor — adapting when the bandit's own decisions change behavior
 
@@ -101,9 +139,19 @@ as plain numbers; the linear model would have no way to know that
 without this).
 
 **Not documented:** why these two particular behavioral features
-(24h session count, 5-session rolling average active time) rather than
-others — e.g. a longer-horizon trend, days-since-last-visit, or a
+(24h session count, 5-session rolling average active time) were the
+original choice rather than others — e.g. a longer-horizon trend or a
 site-category signal.
+
+One candidate addition — an 8th "hours since last visit" dimension — was
+tested rather than left as a documented gap. `eval/simulate_recency.py`
+ran a bandit that could see it against one that couldn't, against an
+identical ground truth deliberately built so recency carries a real signal
+independent of the two features already present. Result: no reliable
+benefit (differences under ~1%, direction flipped between a 5-seed and a
+20-seed run of the same setup — noise, not signal) — see docs/adr/0002 for
+the numbers and a working theory for why. `FEATURE_DIM` stays 7. This was
+a genuine test with a negative result, not a decision to defer.
 
 ## Reward function — access is never positive, only avoiding it is
 
@@ -322,6 +370,24 @@ automated coverage of the browser-integration pieces (`background.js`'s
 `chrome.*`-driven logic, `content.js`/`content-main.js`, the DNR rules) —
 those need manual verification in an actual loaded extension.
 
+- `eval/` — a separate Python offline evaluation harness (NumPy port of
+  `lib/linucb.js`/`lib/config.js`, a synthetic simulation environment,
+  Optuna-based tuning, `pytest` tests) for measuring proposed learning
+  changes before shipping them, rather than tuning by feel. Not part of
+  the extension itself — a from-scratch port, kept in sync by hand; see
+  `docs/adr/0001-reward-shaping-and-eval-harness.md`'s "Tooling
+  justification" for why each dependency in `eval/requirements.txt` earned
+  its place.
+- `docs/adr/` — Nygard-format decision records for changes worth a durable
+  "why," starting with the two `eval/`-backed ones (`0001`: the reward
+  ceiling and alpha miscalibration; `0002`: the recency feature tested and
+  rejected, cross-site warm-start tested and shipped). `docs/adr/README.md`
+  has the convention for proposing any future addition to `eval/`'s
+  toolchain.
+- `notebooks/bandit_tuning.ipynb` — executes the `eval/tune.py` sweep and
+  renders the regret-curve/reward-variant plots referenced in ADR 0001;
+  regenerated (not hand-edited) whenever the numbers change.
+
 ## Development
 
 Requires Node 18+ — only for running tests and linting. The extension
@@ -338,6 +404,14 @@ npm run lint
 its one job is catching real mistakes (unused variables, references to
 undeclared globals), not enforcing a formatting style. Both commands run
 in CI on every push and PR.
+
+`eval/`'s Python tests are separate from the extension itself (Python
+3.10+, its own `requirements.txt`) and run in their own CI job:
+
+```
+pip install -r eval/requirements.txt
+pytest eval/ -q
+```
 
 ## Known limitations (MVP scope)
 
@@ -359,10 +433,15 @@ in CI on every push and PR.
 - Why a bandit-based approach over a simpler mechanism (fixed schedule,
   static rules, manual-only overrides)?
 - Why LinUCB specifically over other bandit algorithms?
-- Why disjoint per-site models rather than a shared/hybrid one — a
-  deliberate rejection, or just out of scope for v0.1?
+- Why disjoint per-site models rather than a *full* shared/hybrid one (the
+  paper this implements defines one) — a deliberate rejection for v0.1, or
+  just out of scope? Cross-site warm-start (above) narrows this gap for a
+  new site's starting point specifically, but doesn't address ongoing
+  weight sharing across established sites.
 - Why these particular default magnitudes (`alpha = 1.0`,
   `denyReward = 0.15`, `denyOverridePenalty = 0.4`,
-  `penaltyPerMinute = 1/30`, etc.)? They're documented as *what* they do
-  and are editable in settings, but not why these specific starting
-  values versus others.
+  `penaltyPerMinute = 1/30`, etc.)? ADR 0001 found `alpha = 1.0` likely
+  miscalibrated (~80x more regret than a tuned value in simulation) but
+  deliberately didn't change it pending real usage data — see that ADR's
+  Consequences section. The rest remain documented as *what* they do, not
+  why these specific starting values versus others.

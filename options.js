@@ -46,6 +46,7 @@ async function loadSettings() {
   const { settings } = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
   document.getElementById('alpha').value = settings.alpha;
   document.getElementById('discountFactor').value = settings.discountFactor;
+  document.getElementById('crossSiteWarmStartWeight').value = settings.crossSiteWarmStartWeight;
   document.getElementById('armDurations').value = settings.armDurationsMin.join(',');
   document.getElementById('penaltyPerMinute').value = settings.penaltyPerMinute;
   document.getElementById('denyReward').value = settings.denyReward;
@@ -86,6 +87,7 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
   const settings = {
     alpha: parseFloat(document.getElementById('alpha').value),
     discountFactor: parseFloat(document.getElementById('discountFactor').value),
+    crossSiteWarmStartWeight: parseFloat(document.getElementById('crossSiteWarmStartWeight').value),
     armDurationsMin,
     penaltyPerMinute: parseFloat(document.getElementById('penaltyPerMinute').value),
     denyReward: parseFloat(document.getElementById('denyReward').value),
