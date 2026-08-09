@@ -14,6 +14,7 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "eslint": "^9.39.5"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1"
   }
 }

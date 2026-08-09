@@ -141,7 +141,7 @@ async function rebuildContentScripts() {
 // tabs already sitting on the site — inject into those immediately so a
 // freshly-managed site is enforced without requiring a manual reload.
 async function injectIntoOpenTabs(hostname) {
-  let tabs = [];
+  let tabs;
   try {
     tabs = await chrome.tabs.query({ url: [`*://*.${hostname}/*`, `*://${hostname}/*`] });
   } catch {
@@ -212,7 +212,7 @@ async function onTick() {
 // already-open tab on the site untouched until the user manually reloads or
 // types a new URL. Force those tabs back to the blocked page immediately.
 async function kickOutTabs(hostname) {
-  let tabs = [];
+  let tabs;
   try {
     tabs = await chrome.tabs.query({ url: [`*://*.${hostname}/*`, `*://${hostname}/*`] });
   } catch {
@@ -312,7 +312,7 @@ async function handleExpiry(hostname) {
   if (!grant) return;
 
   const longFormEngaged = isLongFormEngaged(grant.activeSeconds, grant.durationMin, store.settings.longFormDwellMin);
-  let activeTab = null;
+  let activeTab;
   try {
     [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   } catch {
