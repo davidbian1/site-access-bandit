@@ -2,6 +2,7 @@ import {
   TICK_PERIOD_MIN,
   MAX_SESSIONS_LOGGED,
   STALE_GRANT_THRESHOLD_MIN,
+  minutesToMs,
   defaultSettings,
   hostnameFromUrl,
   buildContext,
@@ -281,7 +282,7 @@ async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}
   if (!grant.overridden && !grant.extended && activeMinutes >= store.settings.extremeLongFormMin) {
     store.extendEligible[hostname] = {
       context: grant.context,
-      expiresAt: now + store.settings.extendOfferWindowMin * 60 * 1000,
+      expiresAt: now + minutesToMs(store.settings.extendOfferWindowMin),
     };
   }
 
@@ -520,7 +521,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // re-gating on this site for a grace window afterward. The hop count
         // is generous enough that this behaves like free browsing for the
         // window's duration in practice (see consumeGrace).
-        store.grace[hostname] = { expiresAt: now + store.settings.overrideGraceMin * 60 * 1000, hopsRemaining: store.settings.overrideGraceHopCount };
+        store.grace[hostname] = { expiresAt: now + minutesToMs(store.settings.overrideGraceMin), hopsRemaining: store.settings.overrideGraceHopCount };
 
         // Bank trust credit too, so near-future access on this site stays
         // easier for a while after the grace window itself lapses — decaying
@@ -568,7 +569,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // unlike override's grace, which is generous enough to feel like
         // free browsing.
         store.grace[hostname] = {
-          expiresAt: now + store.settings.extendGraceMin * 60 * 1000,
+          expiresAt: now + minutesToMs(store.settings.extendGraceMin),
           hopsRemaining: store.settings.extendHopCount,
         };
 
