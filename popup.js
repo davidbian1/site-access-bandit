@@ -83,4 +83,37 @@ async function render() {
   }
 }
 
+// Blocks every managed site at once, initiated by the user rather than the
+// bandit — see DEFAULT_BREAK_MAX_MIN's comment in lib/config.js. Overriding
+// it early is deliberately only available from a site's blocked page (same
+// wait-then-hold friction as any other override), not from this popup, so
+// backing out takes the same real effort as it does everywhere else.
+async function renderBreak() {
+  const status = await chrome.runtime.sendMessage({ type: 'GET_BREAK_STATUS' });
+  const activeEl = document.getElementById('breakActive');
+  const formEl = document.getElementById('breakForm');
+  const minutesInput = document.getElementById('breakMinutes');
+  minutesInput.max = status.maxMinutes;
+  minutesInput.placeholder = `up to ${status.maxMinutes}`;
+
+  if (status.active) {
+    formEl.style.display = 'none';
+    activeEl.style.display = 'block';
+    const remainingMin = Math.max(1, Math.ceil((status.breakUntil - Date.now()) / 60000));
+    activeEl.textContent = `On a break — ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining. All managed sites are blocked; ending it early is only available from a site's blocked page.`;
+  } else {
+    formEl.style.display = 'flex';
+    activeEl.style.display = 'none';
+  }
+}
+
+document.getElementById('startBreakBtn').addEventListener('click', async () => {
+  const minutes = parseInt(document.getElementById('breakMinutes').value, 10);
+  if (!minutes || minutes <= 0) return;
+  await chrome.runtime.sendMessage({ type: 'START_BREAK', minutes });
+  render();
+  renderBreak();
+});
+
 render();
+renderBreak();

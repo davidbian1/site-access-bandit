@@ -467,6 +467,50 @@ continuous stretch, capped at `RECONSTRUCTED_VISIT_GAP_CAP_MIN` (default
 sitting open the whole time. This requires the `history` permission,
 added to `manifest.json`.
 
+## Take a break
+
+Everything above is reactive from the bandit's side (you show up, it
+decides) or an escape hatch you reach for after being denied (override,
+extend). Take a break is the one proactive mechanism: from the popup, you
+can block every managed site at once for a chosen number of minutes,
+before you're actually tempted, rather than relying on willpower or a
+fresh bandit decision in the moment.
+
+It's a commitment device, not a bandit decision — `startBreak` and
+`overrideBreak` in `background.js` never call `bandit.update()` or touch
+`banditState`; there's no context vector or arm choice behind a break, so
+there's nothing honest to train on. `handleRequestAccess` and `CHECK_ACCESS`
+both check `store.breakUntil` before anything else — before grants,
+cooldowns, or grace credits — so a break supersedes all of them uniformly
+rather than needing special-cased exceptions at each site's own state.
+Starting one immediately ends any grant already in progress
+(`finalizeSession(hostname, 'break-started')`, which still trains the
+bandit normally — the time actually spent before the break started is
+real usage data) and kicks out any already-open tab on a managed site,
+including ones a lingering grace credit would otherwise have let through.
+
+Two constraints keep it from working against you or from being pointless:
+
+- **A hard cap on how long a single break can be**, `breakMaxMin` (default
+  180 minutes), enforced server-side (`clampBreakMinutes` in
+  `lib/config.js`) rather than trusted from whatever the popup's input
+  happened to send. This isn't a punishment mechanism — an unbounded break
+  could lock out a site you end up genuinely needing, with no bandit
+  decision or override delay standing between you and that being a real
+  problem, only the passage of time.
+- **A deliberately steeper override than any other in the extension.**
+  Ending a break early still goes through the same wait-then-hold shape as
+  every other override (see blocked.js), but with its own settings
+  (`breakOverrideDelaySec` default 45s, `breakOverrideHoldMs` default 8s)
+  that are flat and — unlike the ordinary per-site override — never
+  discounted by banked trust (`applyTrustDiscount` is not applied here).
+  The whole point of asking for a break is to bind your future self; an
+  override that's just as easy to reach as any ordinary denial would
+  undermine that the first time it's actually tested. It's intentionally
+  only reachable from a site's blocked page, not from the popup itself —
+  the popup can start a break, but backing out requires actually hitting
+  the wall a break is meant to put up.
+
 ## Known limitations (MVP scope)
 
 - Blocking only covers top-level (`main_frame`) navigations, not iframes.

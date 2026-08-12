@@ -16,6 +16,7 @@ import {
   decayedTrust,
   applyTrustDiscount,
   consumeGrace,
+  clampBreakMinutes,
 } from './lib/config.js';
 import {
   escapeRegex,
@@ -47,6 +48,8 @@ async function getStore() {
     'lastRequestAt',
     'nextRuleId',
     'lastHeartbeat',
+    'breakUntil',
+    'breaks',
   ]);
   return {
     sites: data.sites || [],
@@ -61,6 +64,8 @@ async function getStore() {
     lastRequestAt: data.lastRequestAt || {},
     nextRuleId: data.nextRuleId || 1,
     lastHeartbeat: data.lastHeartbeat || 0,
+    breakUntil: data.breakUntil || 0,
+    breaks: data.breaks || [],
   };
 }
 
@@ -452,11 +457,67 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+// ---- take a break ---------------------------------------------------------
+// A proactive, global block across every managed site, initiated by the
+// user rather than decided by the bandit — see DEFAULT_BREAK_MAX_MIN's
+// comment in lib/config.js for why it's capped and why overriding it is
+// deliberately harder than an ordinary per-site override.
+
+async function startBreak(requestedMinutes) {
+  let store = await getStore();
+  const now = Date.now();
+  const minutes = clampBreakMinutes(requestedMinutes, store.settings);
+  const breakUntil = now + minutesToMs(minutes);
+
+  // A break starting mid-session should actually end that session, not just
+  // block whatever comes next — finalizeSession also clears the site's
+  // block rule exemption and kicks its tabs back to the blocked page.
+  for (const hostname of Object.keys(store.grants)) {
+    await finalizeSession(hostname, 'break-started');
+  }
+
+  store = await getStore();
+  store.breaks.push({ startedAt: now, plannedMinutes: minutes, endsAt: breakUntil, overridden: false });
+  if (store.breaks.length > MAX_SESSIONS_LOGGED) store.breaks = store.breaks.slice(-MAX_SESSIONS_LOGGED);
+  await setStore({ breakUntil, breaks: store.breaks });
+
+  // Grants are already gone, but a lingering grace credit or an already-open
+  // tab on a managed site (loaded before the break started) shouldn't be
+  // exempt from it either.
+  for (const site of store.sites) await kickOutTabs(site.hostname);
+
+  return { breakUntil, minutes };
+}
+
+// Cancels an active break early. Deliberately doesn't grant access to
+// anything by itself — it just lets the normal per-site flow (bandit
+// decision, cooldown, etc.) apply again on the next request, same as if no
+// break had ever started. Costs nothing on the bandit side: this isn't a
+// site-specific decision, so there's no reward or context to feed it.
+async function overrideBreak() {
+  const store = await getStore();
+  const now = Date.now();
+  if (!store.breakUntil || now >= store.breakUntil) {
+    return { ok: false, error: 'no active break' };
+  }
+  const current = store.breaks[store.breaks.length - 1];
+  if (current && !current.endedAt) {
+    current.endedAt = now;
+    current.overridden = true;
+  }
+  await setStore({ breakUntil: 0, breaks: store.breaks });
+  return { ok: true };
+}
+
 // ---- core decision logic -------------------------------------------------
 
 async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false } = {}) {
   let store = await getStore();
   const now = Date.now();
+
+  if (store.breakUntil && now < store.breakUntil) {
+    return { granted: false, onBreak: true, breakUntil: store.breakUntil };
+  }
 
   if (store.grants[hostname]) {
     if (isGrantStale(store.grants[hostname], now, STALE_GRANT_THRESHOLD_MIN)) {
@@ -703,6 +764,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'CHECK_ACCESS': {
           const store = await getStore();
           const now = Date.now();
+          if (store.breakUntil && now < store.breakUntil) {
+            // Deliberately doesn't touch grace: a break overrides everything
+            // else, including a credit that would otherwise let a
+            // navigation straight through — spending a hop of it here would
+            // both fail to load the page and burn the credit for nothing.
+            sendResponse({ granted: false, grace: false, onBreak: true, breakUntil: store.breakUntil });
+            break;
+          }
           // A grant that's still sitting in storage isn't necessarily still
           // valid — its expire alarm may not have fired yet (delayed, or
           // missed entirely while the extension was disabled). Unlike a
@@ -784,6 +853,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'CLEAR_SESSIONS': {
           await setStore({ sessions: [] });
           sendResponse({ ok: true });
+          break;
+        }
+        case 'START_BREAK': {
+          const result = await startBreak(msg.minutes);
+          sendResponse({ ok: true, ...result });
+          break;
+        }
+        case 'OVERRIDE_BREAK': {
+          const result = await overrideBreak();
+          sendResponse(result);
+          break;
+        }
+        case 'GET_BREAK_STATUS': {
+          const store = await getStore();
+          const now = Date.now();
+          sendResponse({
+            active: !!(store.breakUntil && now < store.breakUntil),
+            breakUntil: store.breakUntil,
+            maxMinutes: store.settings.breakMaxMin,
+            overrideDelaySec: store.settings.breakOverrideDelaySec,
+            overrideHoldMs: store.settings.breakOverrideHoldMs,
+          });
           break;
         }
         case 'GET_BANDIT_DEBUG': {

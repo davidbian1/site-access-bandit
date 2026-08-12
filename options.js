@@ -75,6 +75,9 @@ async function loadSettings() {
   document.getElementById('minCooldownSec').value = settings.minCooldownSec;
   document.getElementById('maxCooldownSec').value = settings.maxCooldownSec;
   document.getElementById('cooldownRampSecPerMin').value = settings.cooldownRampSecPerMin;
+  document.getElementById('breakMaxMin').value = settings.breakMaxMin;
+  document.getElementById('breakOverrideDelaySec').value = settings.breakOverrideDelaySec;
+  document.getElementById('breakOverrideHoldMs').value = settings.breakOverrideHoldMs;
 }
 
 document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
@@ -116,6 +119,9 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
     minCooldownSec: parseFloat(document.getElementById('minCooldownSec').value),
     maxCooldownSec: parseFloat(document.getElementById('maxCooldownSec').value),
     cooldownRampSecPerMin: parseFloat(document.getElementById('cooldownRampSecPerMin').value),
+    breakMaxMin: parseFloat(document.getElementById('breakMaxMin').value),
+    breakOverrideDelaySec: parseFloat(document.getElementById('breakOverrideDelaySec').value),
+    breakOverrideHoldMs: parseFloat(document.getElementById('breakOverrideHoldMs').value),
   };
   await chrome.runtime.sendMessage({ type: 'SET_SETTINGS', settings });
   const status = document.getElementById('saveStatus');

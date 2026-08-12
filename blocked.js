@@ -202,6 +202,12 @@ function handleAccessResult(response) {
     return;
   }
 
+  if (response.onBreak) {
+    skipCooldown.hide();
+    checkBreak();
+    return;
+  }
+
   if (response.cooldown) {
     // Shouldn't normally happen from a skip-cooldown call, but stay consistent if it does.
     startCooldownCountdown(response.retryAtMs, response.cooldownHoldMs);
@@ -250,7 +256,76 @@ const extend = makeHoldButton(extendBtn, {
   },
 });
 
+// ---- take a break override (proactive, cross-site block) ----
+
+const overrideBreakBtn = document.getElementById('overrideBreakBtn');
+let breakDelayTimer = null;
+
+const overrideBreak = makeHoldButton(overrideBreakBtn, {
+  label: 'Hold to override break',
+  onFire: async () => {
+    status.textContent = 'Overriding break…';
+    const response = await chrome.runtime.sendMessage({ type: 'OVERRIDE_BREAK' });
+    if (response.ok) {
+      status.textContent = 'Break ended — you can request access again.';
+      overrideBreak.hide();
+      clearInterval(breakDelayTimer);
+      btn.disabled = false;
+      btn.style.display = 'inline-block';
+    } else {
+      status.textContent = "Couldn't override — the break may have already ended.";
+      checkBreak();
+    }
+  },
+});
+
+// Same wait-then-hold shape as the ordinary per-site override, but flat (no
+// ramp, no discount for banked trust) and deliberately longer by default —
+// see DEFAULT_BREAK_OVERRIDE_DELAY_SEC/HOLD_MS in lib/config.js.
+function armOverrideBreakButton(delaySec, holdMs) {
+  overrideBreakBtn.style.display = 'inline-block';
+  overrideBreakBtn.disabled = true;
+  clearInterval(breakDelayTimer);
+  let remaining = Math.ceil(delaySec || 0);
+  const tick = () => {
+    if (remaining <= 0) {
+      clearInterval(breakDelayTimer);
+      overrideBreak.show(`Hold to override break (${Math.round((holdMs || 3000) / 1000)}s)`, holdMs);
+      return;
+    }
+    overrideBreak.setLabel(`Override break (available in ${remaining}s)`);
+    remaining -= 1;
+  };
+  tick();
+  breakDelayTimer = setInterval(tick, 1000);
+}
+
+// Returns whether a break is currently active, and updates the page to
+// match either way — called on load and again after a break-blocked
+// request or a failed override, so the page never gets stuck showing
+// controls that don't match the current state.
+async function checkBreak() {
+  const breakStatus = await chrome.runtime.sendMessage({ type: 'GET_BREAK_STATUS' });
+  if (!breakStatus.active) {
+    overrideBreak.hide();
+    clearInterval(breakDelayTimer);
+    return false;
+  }
+  btn.disabled = true;
+  override.hide();
+  skipCooldown.hide();
+  extend.hide();
+  clearInterval(overrideDelayTimer);
+  clearInterval(countdownTimer);
+  const remainingMin = Math.max(1, Math.ceil((breakStatus.breakUntil - Date.now()) / 60000));
+  status.textContent = `You're on a break — ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.`;
+  armOverrideBreakButton(breakStatus.overrideDelaySec, breakStatus.overrideHoldMs);
+  return true;
+}
+
 (async () => {
+  const onBreak = await checkBreak();
+  if (onBreak) return; // a break in progress supersedes the extend offer
   const { eligible, holdMs } = await chrome.runtime.sendMessage({ type: 'GET_EXTEND_ELIGIBILITY', hostname });
   if (eligible) extend.show(undefined, holdMs);
 })();

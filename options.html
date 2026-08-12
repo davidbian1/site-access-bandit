@@ -145,6 +145,15 @@
     <label for="cooldownRampSecPerMin">Cooldown ramp (extra seconds per minute of recent avg active time)</label>
     <input type="number" id="cooldownRampSecPerMin" step="0.5" min="0" />
 
+    <label for="breakMaxMin">Take-a-break cap (minutes) — longest break you can start at once</label>
+    <input type="number" id="breakMaxMin" step="5" min="1" />
+
+    <label for="breakOverrideDelaySec">Break override wait (seconds) — flat, not discounted by trust</label>
+    <input type="number" id="breakOverrideDelaySec" step="5" min="0" />
+
+    <label for="breakOverrideHoldMs">Break override hold duration (milliseconds)</label>
+    <input type="number" id="breakOverrideHoldMs" step="500" min="0" />
+
     <div>
       <button class="primary" id="saveSettingsBtn">Save settings</button>
       <span id="saveStatus"></span>

@@ -62,7 +62,7 @@
   .extend .hold-fill { background: rgba(138, 180, 248, 0.35); }
   .skip-cooldown .hold-fill { background: rgba(129, 199, 132, 0.35); }
   #status { margin-top: 14px; font-size: 13px; min-height: 18px; }
-  #overrideBtn, #extendBtn, #skipCooldownBtn { display: none; }
+  #overrideBtn, #extendBtn, #skipCooldownBtn, #overrideBreakBtn { display: none; }
 </style>
 </head>
 <body>
@@ -81,6 +81,10 @@
     <button id="skipCooldownBtn" class="secondary skip-cooldown">
       <span class="hold-fill"></span>
       <span class="label">Ask now instead of waiting</span>
+    </button>
+    <button id="overrideBreakBtn" class="secondary">
+      <span class="hold-fill"></span>
+      <span class="label">Override break</span>
     </button>
     <div id="status"></div>
   </div>
