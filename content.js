@@ -36,6 +36,26 @@
     goToBlockedPage(targetUrl);
   }
 
+  // Debounced: some sites rewrite the URL (a query param, a hash) for
+  // reasons that have nothing to do with the user actually navigating -
+  // analytics tokens, scroll-position anchors, session state. Reacting to
+  // every one of those instantly ends a still-valid grant over a change
+  // that isn't really a new page. Waiting a short window for the URL to
+  // settle before acting filters out a single transient blip without
+  // meaningfully delaying enforcement of a real, sustained navigation.
+  const NAVIGATE_DEBOUNCE_MS = 500;
+  let debounceTimer = null;
+  let debouncedUrl = null;
+
+  function scheduleNavigate(url) {
+    if (redirecting || !url || url === lastUrl) return;
+    debouncedUrl = url;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      if (debouncedUrl === location.href) handleNavigate(debouncedUrl);
+    }, NAVIGATE_DEBOUNCE_MS);
+  }
+
   async function handleNavigate(url) {
     if (redirecting || !url || url === lastUrl) return;
     lastUrl = url;
@@ -48,12 +68,12 @@
     endCurrentSessionAndBlock(url);
   }
 
-  window.addEventListener('__mab_navigate', (e) => handleNavigate(e.detail));
-  window.addEventListener('popstate', () => handleNavigate(location.href));
+  window.addEventListener('__mab_navigate', (e) => scheduleNavigate(e.detail));
+  window.addEventListener('popstate', () => scheduleNavigate(location.href));
 
   // Fast fallback for routing that changes the URL without going through
   // history.pushState/replaceState/popstate at all.
-  setInterval(() => handleNavigate(location.href), 300);
+  setInterval(() => scheduleNavigate(location.href), 300);
 
   // Initial load: confirm there's actually a live grant (or grace credit)
   // covering this exact page. Non-consuming — just a peek, not a hop spend.

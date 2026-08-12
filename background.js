@@ -629,7 +629,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'CHECK_ACCESS': {
           const store = await getStore();
           const now = Date.now();
-          const hasGrant = !!store.grants[msg.hostname];
+          // A grant that's still sitting in storage isn't necessarily still
+          // valid — its expire alarm may not have fired yet (delayed, or
+          // missed entirely while the extension was disabled). Unlike a
+          // fresh handleRequestAccess call, this runs on every page load and
+          // every detected navigation, so it's the one place that would
+          // otherwise silently keep treating a long-dead grant as live
+          // indefinitely - checking staleness here, not just existence,
+          // closes that gap directly instead of relying on some other event
+          // to eventually notice.
+          const grant = store.grants[msg.hostname];
+          const hasGrant = !!grant && !isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN);
           let inGrace;
           if (msg.consume) {
             // A navigation is actually about to spend the credit — decrement

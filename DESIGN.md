@@ -427,6 +427,17 @@ pytest eval/ -q
   amount of CPU on every open tab of a managed site for as long as that
   tab stays open, in exchange for not missing navigations the real hooks
   can't see.
+- Any detected URL change is debounced 500ms before being treated as a
+  real navigation, to filter out sites that rewrite the URL (an analytics
+  token, a hash-based scroll anchor) for reasons that aren't actually a
+  new page — found from a real report of getting re-gated on what felt
+  like the same page. This can't be solved with something like "ignore
+  query-string changes," since some sites (e.g. `?v=VIDEO_ID` on the same
+  path) rely on the query string to signal real navigation — the debounce
+  filters transient/self-correcting churn without weakening detection of
+  a sustained one. Not verified against a specific site; if this keeps
+  happening, the debounce window or approach may need to be revisited
+  with that site's actual URL behavior in hand.
 
 ## Open questions — rationale not documented anywhere in the repo
 
