@@ -820,3 +820,20 @@ chrome.runtime.onInstalled.addListener(async () => {
   await rebuildContentScripts();
   await ensureHeartbeatAlarm();
 });
+
+// Re-enabling a disabled extension (or a browser restart) doesn't fire
+// onInstalled — but it does re-run this module's top-level code, since
+// that's exactly what "starting the service worker back up" means. That
+// makes this the earliest possible hook for noticing a gap, rather than
+// waiting for the next scheduled heartbeat alarm to happen to fire (which
+// could lag the actual re-enable by up to HEARTBEAT_PERIOD_MIN). Wrapped so
+// a missing permission or a cold-start race with storage doesn't crash the
+// service worker on every wake.
+(async () => {
+  try {
+    await onHeartbeat();
+    await ensureHeartbeatAlarm();
+  } catch (err) {
+    console.error('[background] startup gap check failed:', err);
+  }
+})();

@@ -442,7 +442,11 @@ stop, so there's no possible in-extension record of that window. A
 writes a timestamp whenever the extension *is* running; if two heartbeats
 are further apart than `HEARTBEAT_GAP_THRESHOLD_MIN` (default 12 minutes —
 comfortably past ordinary alarm jitter), something stopped the service
-worker from running for a while. The most common cause is manually
+worker from running for a while. The same check also runs immediately at
+the top of `background.js` on every service worker start — re-enabling a
+disabled extension re-runs that top-level code the same way a fresh
+browser launch does, so the gap is detected and reconstructed right away
+rather than waiting for the next scheduled heartbeat to happen to land. The most common cause is manually
 disabling the extension, though a closed browser or a sleeping computer
 look identical from in here — there's no way to tell those apart, and this
 doesn't try to.
