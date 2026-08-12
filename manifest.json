@@ -3,7 +3,7 @@
   "name": "Mindful Access Bandit",
   "version": "0.1.0",
   "description": "A contextual bandit (LinUCB) decides whether to grant time-limited access to sites you choose to restrict, learning from how long you actually stay.",
-  "permissions": ["storage", "alarms", "tabs", "declarativeNetRequest", "scripting"],
+  "permissions": ["storage", "alarms", "tabs", "declarativeNetRequest", "scripting", "history"],
   "optional_host_permissions": ["*://*/*"],
   "background": {
     "service_worker": "background.js",

@@ -170,6 +170,31 @@
   </section>
 
   <section>
+    <h2>Learning trends</h2>
+    <p class="muted">
+      Reward is the bandit's own scorecard — trending up means it's choosing arms that score
+      better against the reward function, independent of how much you happen to want the site
+      that week. "Unmonitored est." is a rough reconstruction of time on a site while the
+      extension wasn't running (most commonly: manually disabled) using your browser history —
+      it's an estimate from visit spacing, not a real measurement, and only appears once a gap
+      has actually been detected.
+    </p>
+    <table id="trendsTable">
+      <thead>
+        <tr>
+          <th>Site</th>
+          <th>Sessions</th>
+          <th>Reward (early → recent)</th>
+          <th>Override rate (early → recent)</th>
+          <th>Active min (real)</th>
+          <th>Unmonitored est. min</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
     <h2>Session history</h2>
     <button class="danger" id="clearSessionsBtn">Clear history</button>
     <table id="sessionsTable">

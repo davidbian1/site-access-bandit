@@ -154,6 +154,7 @@ document.getElementById('resetAllBtn').addEventListener('click', async () => {
 document.getElementById('clearSessionsBtn').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'CLEAR_SESSIONS' });
   loadSessions();
+  loadTrends();
 });
 
 async function loadSessions() {
@@ -184,6 +185,82 @@ async function loadSessions() {
   }
 }
 
+// Groups session history per site and splits each site's reward-bearing
+// decisions (grant/deny; excludes reconstructed-gap entries, which carry no
+// reward) into an early half and a recent half chronologically, so a swing
+// in the average is visible without needing a chart library. Deliberately
+// not just "total time on site": that number is confounded by how much you
+// happened to want the site that week, not just how the bandit is scoring
+// arms — see options.html's caveat text above the table.
+function computeTrends(sessions) {
+  const byHost = new Map();
+  for (const s of sessions) {
+    if (!byHost.has(s.hostname)) byHost.set(s.hostname, { real: [], reconstructedMin: 0 });
+    const bucket = byHost.get(s.hostname);
+    if (s.reconstructed) {
+      bucket.reconstructedMin += s.activeMinutes || 0;
+    } else if (s.decision === 'grant' || s.decision === 'deny') {
+      bucket.real.push(s);
+    }
+  }
+
+  const rows = [];
+  for (const [hostname, { real, reconstructedMin }] of byHost) {
+    const chronological = real.slice().sort((a, b) => a.grantedAt - b.grantedAt);
+    const mid = Math.floor(chronological.length / 2);
+    const early = chronological.slice(0, mid);
+    const recent = chronological.slice(mid);
+
+    const avg = (arr, fn) => (arr.length ? arr.reduce((sum, s) => sum + fn(s), 0) / arr.length : null);
+    const rewardEarly = avg(early, (s) => s.reward || 0);
+    const rewardRecent = avg(recent, (s) => s.reward || 0);
+    const overrideRateEarly = avg(early, (s) => (s.overridden ? 1 : 0));
+    const overrideRateRecent = avg(recent, (s) => (s.overridden ? 1 : 0));
+    const realActiveMin = chronological.reduce((sum, s) => sum + (s.activeMinutes || 0), 0);
+
+    rows.push({
+      hostname,
+      sessionCount: chronological.length,
+      rewardEarly,
+      rewardRecent,
+      overrideRateEarly,
+      overrideRateRecent,
+      realActiveMin,
+      reconstructedMin,
+    });
+  }
+  return rows.sort((a, b) => b.sessionCount - a.sessionCount);
+}
+
+function fmtOrDash(n, digits = 3) {
+  return n === null ? '—' : n.toFixed(digits);
+}
+
+async function loadTrends() {
+  const { sessions } = await chrome.runtime.sendMessage({ type: 'GET_SESSIONS' });
+  const rows = computeTrends(sessions);
+  const tbody = document.querySelector('#trendsTable tbody');
+  tbody.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const cells = [
+      r.hostname,
+      String(r.sessionCount),
+      `${fmtOrDash(r.rewardEarly)} → ${fmtOrDash(r.rewardRecent)}`,
+      `${fmtOrDash(r.overrideRateEarly, 2)} → ${fmtOrDash(r.overrideRateRecent, 2)}`,
+      r.realActiveMin.toFixed(1),
+      r.reconstructedMin > 0 ? r.reconstructedMin.toFixed(1) : '—',
+    ];
+    for (const text of cells) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
 loadSites();
 loadSettings();
 loadSessions();
+loadTrends();

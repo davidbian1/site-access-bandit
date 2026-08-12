@@ -2,6 +2,9 @@ import {
   TICK_PERIOD_MIN,
   MAX_SESSIONS_LOGGED,
   STALE_GRANT_THRESHOLD_MIN,
+  HEARTBEAT_PERIOD_MIN,
+  HEARTBEAT_GAP_THRESHOLD_MIN,
+  RECONSTRUCTED_VISIT_GAP_CAP_MIN,
   minutesToMs,
   defaultSettings,
   hostnameFromUrl,
@@ -22,9 +25,11 @@ import {
   isGrantStale,
   isLongFormEngaged,
   getBanditFor,
+  estimateExposureMinutes,
 } from './lib/background-helpers.js';
 
 const TICK_ALARM = 'tick';
+const HEARTBEAT_ALARM = 'heartbeat';
 
 // ---- storage helpers -------------------------------------------------
 
@@ -41,6 +46,7 @@ async function getStore() {
     'ruleIds',
     'lastRequestAt',
     'nextRuleId',
+    'lastHeartbeat',
   ]);
   return {
     sites: data.sites || [],
@@ -54,6 +60,7 @@ async function getStore() {
     ruleIds: data.ruleIds || {},
     lastRequestAt: data.lastRequestAt || {},
     nextRuleId: data.nextRuleId || 1,
+    lastHeartbeat: data.lastHeartbeat || 0,
   };
 }
 
@@ -163,6 +170,71 @@ async function injectIntoOpenTabs(hostname) {
 async function ensureTickAlarm() {
   const existing = await chrome.alarms.get(TICK_ALARM);
   if (!existing) chrome.alarms.create(TICK_ALARM, { periodInMinutes: TICK_PERIOD_MIN });
+}
+
+// Runs regardless of whether any site currently has a grant (unlike the tick
+// alarm), so there's always a recent timestamp to compare against — the gap
+// between two heartbeats is the only way to notice the service worker wasn't
+// running for a stretch (see HEARTBEAT_GAP_THRESHOLD_MIN in lib/config.js).
+async function ensureHeartbeatAlarm() {
+  const existing = await chrome.alarms.get(HEARTBEAT_ALARM);
+  if (!existing) chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_PERIOD_MIN });
+}
+
+// Best-effort reconstruction of exposure to managed sites during a window
+// the service worker wasn't running to observe directly — see
+// HEARTBEAT_GAP_THRESHOLD_MIN's comment in lib/config.js for why this exists
+// and what it can and can't tell you. Logged as a distinct session shape
+// (reconstructed: true, no armIndex/context/reward) so it's visible in the
+// trends view but never trains the bandit — there's no real context vector
+// or arm choice behind an estimate like this.
+async function reconstructGap(startMs, endMs) {
+  const { sites, sessions } = await getStore();
+  if (sites.length === 0) return;
+
+  const newSessions = [];
+  for (const site of sites) {
+    let results;
+    try {
+      results = await chrome.history.search({ text: site.hostname, startTime: startMs, endTime: endMs, maxResults: 1000 });
+    } catch {
+      continue; // history permission not yet granted, or API unavailable
+    }
+    const visitTimes = results
+      .filter((r) => {
+        const h = hostnameFromUrl(r.url || '');
+        return h && (h === site.hostname || h.endsWith(`.${site.hostname}`));
+      })
+      .map((r) => r.lastVisitTime)
+      .filter((t) => typeof t === 'number')
+      .sort((a, b) => a - b);
+    if (visitTimes.length === 0) continue;
+
+    newSessions.push({
+      hostname: site.hostname,
+      reconstructed: true,
+      grantedAt: startMs,
+      endedAt: endMs,
+      activeMinutes: estimateExposureMinutes(visitTimes, RECONSTRUCTED_VISIT_GAP_CAP_MIN),
+      reward: null,
+      decision: 'reconstructed',
+      endReason: 'unmonitored-gap',
+    });
+  }
+  if (newSessions.length === 0) return;
+
+  let updated = sessions.concat(newSessions);
+  if (updated.length > MAX_SESSIONS_LOGGED) updated = updated.slice(-MAX_SESSIONS_LOGGED);
+  await setStore({ sessions: updated });
+}
+
+async function onHeartbeat() {
+  const store = await getStore();
+  const now = Date.now();
+  if (store.lastHeartbeat && now - store.lastHeartbeat > minutesToMs(HEARTBEAT_GAP_THRESHOLD_MIN)) {
+    await reconstructGap(store.lastHeartbeat, now);
+  }
+  await setStore({ lastHeartbeat: now });
 }
 
 // Every place that activates a grant (a fresh decision, an override, an
@@ -373,6 +445,8 @@ async function handleExpiry(hostname) {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === TICK_ALARM) {
     onTick();
+  } else if (alarm.name === HEARTBEAT_ALARM) {
+    onHeartbeat();
   } else if (alarm.name.startsWith('expire:')) {
     handleExpiry(alarm.name.slice('expire:'.length));
   }
@@ -741,7 +815,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(async () => {
   const store = await getStore();
-  await setStore({ settings: store.settings });
+  await setStore({ settings: store.settings, lastHeartbeat: store.lastHeartbeat || Date.now() });
   await rebuildBlockRules();
   await rebuildContentScripts();
+  await ensureHeartbeatAlarm();
 });

@@ -413,6 +413,56 @@ pip install -r eval/requirements.txt
 pytest eval/ -q
 ```
 
+## Learning trends and unmonitored-gap reconstruction
+
+Whether the bandit is actually learning your habits over time was, until
+now, not observable anywhere in the extension — only individual session
+records and current arm scores. Two additions to the options page address
+this:
+
+- **Reward trend, per site.** The options page now splits each site's
+  logged sessions chronologically into an early half and a recent half and
+  shows the average reward for each. Reward already bakes in duration,
+  frequency, and override penalties (see `computeGrantReward` above), so a
+  rising average is a fairly direct read on "is the bandit choosing arms
+  that score better," without being confounded by how much you happened to
+  want the site that particular week — unlike a raw total-time-on-site
+  number, which conflates the bandit's decisions with your own unrelated
+  day-to-day variation in wanting to visit at all.
+- **Override rate, same split.** Reward improving while override rate also
+  climbs would mean the bandit is scoring well by denying harder and
+  forcing you to fight it, not by getting closer to what you'd choose
+  anyway — tracking both together catches that failure mode that reward
+  alone can't.
+
+**Reconstructing time spent while the extension was disabled.** The
+service worker cannot log anything while disabled — it isn't running, full
+stop, so there's no possible in-extension record of that window. A
+`heartbeat` alarm (`HEARTBEAT_PERIOD_MIN`, default every 5 minutes)
+writes a timestamp whenever the extension *is* running; if two heartbeats
+are further apart than `HEARTBEAT_GAP_THRESHOLD_MIN` (default 12 minutes —
+comfortably past ordinary alarm jitter), something stopped the service
+worker from running for a while. The most common cause is manually
+disabling the extension, though a closed browser or a sleeping computer
+look identical from in here — there's no way to tell those apart, and this
+doesn't try to.
+
+When a gap is detected, `chrome.history.search` is checked for visits to
+each managed hostname during that window (`reconstructGap` in
+`background.js`), and a rough exposure estimate is logged as a distinct
+session shape (`reconstructed: true`, no `armIndex`/`context`/`reward`) —
+visible in the trends table's "Unmonitored est." column, but never fed to
+`bandit.update()`, since there's no real arm choice or context vector
+behind an estimate like this. The estimate itself
+(`estimateExposureMinutes` in `lib/background-helpers.js`) is deliberately
+crude: `history.search` only returns each page's last visit time within
+the window, not a full visit log, so dwell time is inferred from the
+spacing between consecutive visits — closer together reads as one
+continuous stretch, capped at `RECONSTRUCTED_VISIT_GAP_CAP_MIN` (default
+15) so a single visit followed by a long silence doesn't get credited with
+sitting open the whole time. This requires the `history` permission,
+added to `manifest.json`.
+
 ## Known limitations (MVP scope)
 
 - Blocking only covers top-level (`main_frame`) navigations, not iframes.
@@ -438,6 +488,12 @@ pytest eval/ -q
   a sustained one. Not verified against a specific site; if this keeps
   happening, the debounce window or approach may need to be revisited
   with that site's actual URL behavior in hand.
+- The unmonitored-gap reconstruction (see "Learning trends" above) can't
+  distinguish "extension disabled" from "browser closed" or "computer
+  asleep" — any of those produce the same heartbeat gap. It also can't
+  measure dwell time directly, only estimate it from how close together
+  history visits landed, so it's a rough directional signal for the trends
+  view, not a number to treat as ground truth.
 
 ## Open questions — rationale not documented anywhere in the repo
 
