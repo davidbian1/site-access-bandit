@@ -574,6 +574,59 @@ pointless:
   the popup can start a break, but backing out requires actually hitting
   the wall a break is meant to put up.
 
+## Security model
+
+Reviewed against the [OWASP Secure Coding Practices checklist](https://owasp.org/www-project-secure-coding-practices-quick-reference-guide/stable-en/02-checklist/).
+Most of the checklist doesn't apply here — there's no server, no database,
+no authentication, no network communication of any kind (everything stays
+in `chrome.storage.local`). The categories that do apply:
+
+- **Input validation / unvalidated redirects.** `blocked.html` is listed
+  in `web_accessible_resources` with `matches: ["<all_urls>"]` (necessary —
+  a managed site can be any domain a user adds, and the extension's own
+  redirect rule needs to reach it from there), which means *any* page can
+  navigate to it directly with arbitrary query parameters, not just the
+  extension's own code. Its `target` parameter — where a grant or override
+  redirects back to — was previously used with no validation at all: a
+  crafted link like `blocked.html?site=reddit.com&target=https://evil.example/phish`
+  would show the extension's own familiar "access limited" UI for a site
+  the user actually manages, then silently redirect to an attacker-chosen
+  origin the moment access was granted. Fixed by `isTrustedTarget`
+  (`lib/config.js`) — `target` is only used if its hostname is the managed
+  site itself or a subdomain of it; otherwise it falls back to the site's
+  own root. This is the one genuine vulnerability this review found.
+- **Output encoding / injection.** No `innerHTML`, `eval`, or
+  `document.write` anywhere in the codebase — every dynamic table/list is
+  built with `createElement`/`textContent` (see `AUDIT.md`'s roadmap item
+  4 for when this was first swept). No content security policy override in
+  `manifest.json` either — MV3's strict default (`script-src 'self';
+  object-src 'self'`) applies as-is, which is already what a hardened CSP
+  looks like for an extension with no remote code.
+- **Access control / trust boundaries.** `chrome.runtime.onMessage` is
+  only reachable from the extension's own contexts (popup, options,
+  blocked page, its own content scripts) — no `externally_connectable` is
+  declared, so no other extension or web page can send it messages
+  directly. The one boundary an external page *can* reach is exactly the
+  one above (a direct URL to a web-accessible extension page), which is
+  why that's where the validation had to live.
+- **Least privilege (flagged, not yet changed).** `manifest.json` requests
+  the blanket `tabs` permission (visibility into every tab's URL/title,
+  not just managed sites), used for `chrome.tabs.query`/`tabs.update` in
+  `kickOutTabs`/`injectIntoOpenTabs`/`onTick`. Every site the extension
+  actually queries or updates already has its own host permission granted
+  via `chrome.permissions.request` before it's added to `sites` — Chrome's
+  documented permission model suggests `tabs.query`/`tabs.update` already
+  work for a URL the extension holds host permission for, without needing
+  the separate `tabs` permission on top, which would make the blanket grant
+  broader than what's actually used. Not changed here: `onTick`'s
+  active-tab check runs off a background alarm with no user gesture, which
+  rules out substituting the narrower `activeTab` permission for it, and
+  removing `tabs` outright without live-testing whether `tabs.update` on a
+  background (non-active) tab still works under host-permission-only
+  access risks silently breaking active-time tracking — a core input to
+  the reward function. See `ROADMAP.md` for this as a tracked, verify-then-fix
+  item rather than something to change blind.
+
 ## Known limitations (MVP scope)
 
 - Blocking only covers top-level (`main_frame`) navigations, not iframes.

@@ -224,6 +224,30 @@ manual QA pass has happened at least once) and §4.
 
 ---
 
+## 6.5 Security review (OWASP-aligned)
+
+A pass against the [OWASP Secure Coding Practices
+checklist](https://owasp.org/www-project-secure-coding-practices-quick-reference-guide/stable-en/02-checklist/)
+found one real vulnerability and one flagged-but-deferred hardening item —
+full writeup in `DESIGN.md`'s "Security model" section.
+
+- **Fixed:** an unvalidated-redirect vulnerability in `blocked.html`'s
+  `target` query parameter — reachable from any external page since the
+  blocked page is necessarily web-accessible to `<all_urls>`. Closed via
+  `isTrustedTarget` in `lib/config.js`.
+- **Flagged, not changed:** the blanket `tabs` permission in
+  `manifest.json` looks broader than necessary given every queried site
+  already has its own host permission — but removing it risks silently
+  breaking `onTick`'s background-alarm active-time tracking without live
+  verification first. Fold this into §1's manual QA pass: try removing
+  `"tabs"` from `manifest.json`, reload unpacked, and confirm active-time
+  tracking, `kickOutTabs`, and `injectIntoOpenTabs` all still work across
+  a background (non-focused) tab before committing to the change.
+
+**Status:** redirect fix shipped; permission tightening pending §1.
+
+---
+
 ## 7. Explicitly not recommended right now
 
 Called out so these don't get treated as gaps by omission:
