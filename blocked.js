@@ -1,6 +1,15 @@
+import { isTrustedTarget } from './lib/config.js';
+
 const params = new URLSearchParams(location.search);
 const hostname = params.get('site') || '';
-const targetUrl = params.get('target') || `https://${hostname}/`;
+const fallbackTarget = `https://${hostname}/`;
+const requestedTarget = params.get('target');
+// This page is web-accessible from any origin (a managed site can be any
+// domain), so `target` has to be treated as untrusted input, not just
+// "whatever our own code put there" - see isTrustedTarget's comment in
+// lib/config.js. A mismatched target falls back to the site's own root
+// rather than being used at all.
+const targetUrl = requestedTarget && isTrustedTarget(requestedTarget, hostname) ? requestedTarget : fallbackTarget;
 
 document.getElementById('site').textContent = hostname;
 

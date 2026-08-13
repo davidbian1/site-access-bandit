@@ -109,6 +109,15 @@ async function rebuildBlockRules() {
       action: {
         type: 'redirect',
         redirect: {
+          // `\0` (the full matched URL) is inserted raw here — DNR's
+          // regexSubstitution has no way to percent-encode a backreference,
+          // so an `&`/`#` in the real URL's own query string could corrupt
+          // where the `target` param ends. That's a data-integrity wrinkle,
+          // not a security hole on its own — blocked.js treats `target` as
+          // untrusted input regardless of source and validates it against
+          // `site` before ever navigating to it (isTrustedTarget in
+          // lib/config.js), so a corrupted value here just falls back to
+          // the site's own root rather than going anywhere unexpected.
           regexSubstitution: `chrome-extension://${chrome.runtime.id}/blocked.html?site=${encodeURIComponent(
             site.hostname
           )}&target=\\0`,
