@@ -193,6 +193,23 @@ document.getElementById('breakResetBtn').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'RESET_BREAK_BANDIT' });
 });
 
+// The concrete unlock for ADR 0001/0003's "validate against real usage
+// data" next step: eval/tune.py and a future break-bandit equivalent both
+// need real logged sessions, not synthetic ones, and this is the only way
+// to get them out of chrome.storage.local. No "downloads" permission
+// needed — a plain same-page anchor click triggers a normal browser
+// download, same as any regular web page offering a file save.
+document.getElementById('exportSessionsBtn').addEventListener('click', async () => {
+  const { sessions } = await chrome.runtime.sendMessage({ type: 'GET_SESSIONS' });
+  const blob = new Blob([JSON.stringify(sessions, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mindful-access-sessions-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
 document.getElementById('clearSessionsBtn').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'CLEAR_SESSIONS' });
   loadSessions();

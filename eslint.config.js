@@ -13,6 +13,7 @@ const globals = {
   history: 'readonly',
   URL: 'readonly',
   URLSearchParams: 'readonly',
+  Blob: 'readonly',
   CustomEvent: 'readonly',
   console: 'readonly',
   setTimeout: 'readonly',
