@@ -154,6 +154,30 @@
     <label for="breakOverrideHoldMs">Break override hold duration (milliseconds)</label>
     <input type="number" id="breakOverrideHoldMs" step="500" min="0" />
 
+    <label for="breakAlpha">Break-duration bandit exploration coefficient (alpha) — tuned separately from the site bandit's; see ADR 0003</label>
+    <input type="number" id="breakAlpha" step="0.05" min="0" />
+
+    <label for="breakDiscountFactor">Break-duration bandit discount factor (gamma)</label>
+    <input type="number" id="breakDiscountFactor" step="0.001" min="0" max="1" />
+
+    <label for="breakCompleteBonus">Break completion bonus — reward for a break that ran its course without being overridden or followed by an early return</label>
+    <input type="number" id="breakCompleteBonus" step="0.05" min="0" />
+
+    <label for="breakTooShortPenalty">Break too-short penalty — scaled by how soon you were back on a managed site after the break ended</label>
+    <input type="number" id="breakTooShortPenalty" step="0.05" min="0" />
+
+    <label for="breakOverridePenalty">Break override penalty (bandit reward) — scaled by how early the override happened, separate from the friction settings above</label>
+    <input type="number" id="breakOverridePenalty" step="0.05" min="0" />
+
+    <label for="breakTooSoonWindowMin">Break "too soon" window (minutes) — how long after a break ends a return to a managed site still counts against it</label>
+    <input type="number" id="breakTooSoonWindowMin" step="1" min="0" />
+
+    <label for="breakEffortThresholdMin">Break suggestion threshold (minutes) — total time across managed sites today before a break is proactively suggested</label>
+    <input type="number" id="breakEffortThresholdMin" step="5" min="0" />
+
+    <label for="breakSuggestCooldownMin">Break suggestion cooldown (minutes) — minimum time between proactive suggestions</label>
+    <input type="number" id="breakSuggestCooldownMin" step="5" min="0" />
+
     <div>
       <button class="primary" id="saveSettingsBtn">Save settings</button>
       <span id="saveStatus"></span>
@@ -174,6 +198,19 @@
     <p class="muted" id="trustDisplay"></p>
     <table id="debugTable">
       <thead><tr><th>Arm (min)</th><th>Mean estimate</th><th>Uncertainty</th><th>UCB score</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Break-duration bandit (debug)</h2>
+    <div class="add-row">
+      <button id="breakDebugBtn">Show current arm scores</button>
+      <button class="danger" id="breakResetBtn">Reset break-duration model</button>
+    </div>
+    <p class="muted" id="breakEffortDisplay"></p>
+    <table id="breakDebugTable">
+      <thead><tr><th>Arm (min)</th><th>Eligible</th><th>Mean estimate</th><th>Uncertainty</th><th>UCB score</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>

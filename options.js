@@ -78,6 +78,14 @@ async function loadSettings() {
   document.getElementById('breakMaxMin').value = settings.breakMaxMin;
   document.getElementById('breakOverrideDelaySec').value = settings.breakOverrideDelaySec;
   document.getElementById('breakOverrideHoldMs').value = settings.breakOverrideHoldMs;
+  document.getElementById('breakAlpha').value = settings.breakAlpha;
+  document.getElementById('breakDiscountFactor').value = settings.breakDiscountFactor;
+  document.getElementById('breakCompleteBonus').value = settings.breakCompleteBonus;
+  document.getElementById('breakTooShortPenalty').value = settings.breakTooShortPenalty;
+  document.getElementById('breakOverridePenalty').value = settings.breakOverridePenalty;
+  document.getElementById('breakTooSoonWindowMin').value = settings.breakTooSoonWindowMin;
+  document.getElementById('breakEffortThresholdMin').value = settings.breakEffortThresholdMin;
+  document.getElementById('breakSuggestCooldownMin').value = settings.breakSuggestCooldownMin;
 }
 
 document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
@@ -122,6 +130,14 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
     breakMaxMin: parseFloat(document.getElementById('breakMaxMin').value),
     breakOverrideDelaySec: parseFloat(document.getElementById('breakOverrideDelaySec').value),
     breakOverrideHoldMs: parseFloat(document.getElementById('breakOverrideHoldMs').value),
+    breakAlpha: parseFloat(document.getElementById('breakAlpha').value),
+    breakDiscountFactor: parseFloat(document.getElementById('breakDiscountFactor').value),
+    breakCompleteBonus: parseFloat(document.getElementById('breakCompleteBonus').value),
+    breakTooShortPenalty: parseFloat(document.getElementById('breakTooShortPenalty').value),
+    breakOverridePenalty: parseFloat(document.getElementById('breakOverridePenalty').value),
+    breakTooSoonWindowMin: parseFloat(document.getElementById('breakTooSoonWindowMin').value),
+    breakEffortThresholdMin: parseFloat(document.getElementById('breakEffortThresholdMin').value),
+    breakSuggestCooldownMin: parseFloat(document.getElementById('breakSuggestCooldownMin').value),
   };
   await chrome.runtime.sendMessage({ type: 'SET_SETTINGS', settings });
   const status = document.getElementById('saveStatus');
@@ -155,6 +171,26 @@ document.getElementById('resetOneBtn').addEventListener('click', async () => {
 
 document.getElementById('resetAllBtn').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'RESET_BANDIT' });
+});
+
+document.getElementById('breakDebugBtn').addEventListener('click', async () => {
+  const { scores, effortMinutesToday } = await chrome.runtime.sendMessage({ type: 'GET_BREAK_BANDIT_DEBUG' });
+  document.getElementById('breakEffortDisplay').textContent = `Cross-site active time in the last 24h: ${effortMinutesToday.toFixed(1)} min`;
+  const tbody = document.querySelector('#breakDebugTable tbody');
+  tbody.innerHTML = '';
+  for (const s of scores) {
+    const tr = document.createElement('tr');
+    for (const text of [s.durationMin, s.eligible ? 'yes' : 'no (over cap)', s.mean.toFixed(3), s.variance.toFixed(3), s.ucb.toFixed(3)]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+});
+
+document.getElementById('breakResetBtn').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'RESET_BREAK_BANDIT' });
 });
 
 document.getElementById('clearSessionsBtn').addEventListener('click', async () => {
