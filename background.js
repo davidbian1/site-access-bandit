@@ -16,7 +16,9 @@ import {
   decayedTrust,
   applyTrustDiscount,
   consumeGrace,
-  clampBreakMinutes,
+  BREAK_DURATIONS_MIN,
+  eligibleBreakArmIndices,
+  computeBreakReward,
 } from './lib/config.js';
 import {
   escapeRegex,
@@ -27,6 +29,8 @@ import {
   isLongFormEngaged,
   getBanditFor,
   estimateExposureMinutes,
+  globalFatigueStats,
+  getBreakBandit,
 } from './lib/background-helpers.js';
 
 const TICK_ALARM = 'tick';
@@ -50,6 +54,8 @@ async function getStore() {
     'lastHeartbeat',
     'breakUntil',
     'breaks',
+    'breakBanditState',
+    'lastBreakSuggestedAt',
   ]);
   return {
     sites: data.sites || [],
@@ -66,6 +72,8 @@ async function getStore() {
     lastHeartbeat: data.lastHeartbeat || 0,
     breakUntil: data.breakUntil || 0,
     breaks: data.breaks || [],
+    breakBanditState: data.breakBanditState || null,
+    lastBreakSuggestedAt: data.lastBreakSuggestedAt || 0,
   };
 }
 
@@ -454,6 +462,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     onHeartbeat();
   } else if (alarm.name.startsWith('expire:')) {
     handleExpiry(alarm.name.slice('expire:'.length));
+  } else if (alarm.name.startsWith('breakFollowup:')) {
+    onBreakFollowup(alarm.name.slice('breakFollowup:'.length));
   }
 });
 
@@ -461,12 +471,30 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // A proactive, global block across every managed site, initiated by the
 // user rather than decided by the bandit — see DEFAULT_BREAK_MAX_MIN's
 // comment in lib/config.js for why it's capped and why overriding it is
-// deliberately harder than an ordinary per-site override.
+// deliberately harder than an ordinary per-site override. Its *duration* is
+// a bandit decision, same as a site's grant duration — see
+// docs/adr/0003-break-duration-bandit-and-fatigue-feature.md.
 
-async function startBreak(requestedMinutes) {
+function breakContext(store, now) {
+  const fatigue = globalFatigueStats(store.sessions, now);
+  const context = buildContext(new Date(now), { sessionsLast24h: fatigue.sessionsLast24h, avgRecentActiveMin: fatigue.totalActiveMinLast24h });
+  return { context, fatigue };
+}
+
+// armIndex should come from GET_BREAK_SUGGESTION (the popup never sends a
+// raw minute count) — falls back to the shortest eligible arm if it's
+// missing or no longer valid (e.g. breakMaxMin shrank since the suggestion
+// was fetched), rather than rejecting the request outright.
+async function startBreak(armIndex) {
   let store = await getStore();
   const now = Date.now();
-  const minutes = clampBreakMinutes(requestedMinutes, store.settings);
+  const eligible = eligibleBreakArmIndices(store.settings);
+  const chosenArmIndex = eligible.includes(armIndex) ? armIndex : eligible[0];
+  if (chosenArmIndex === undefined) {
+    return { ok: false, error: 'no break duration fits the configured cap' };
+  }
+  const { context } = breakContext(store, now);
+  const minutes = BREAK_DURATIONS_MIN[chosenArmIndex];
   const breakUntil = now + minutesToMs(minutes);
 
   // A break starting mid-session should actually end that session, not just
@@ -477,7 +505,15 @@ async function startBreak(requestedMinutes) {
   }
 
   store = await getStore();
-  store.breaks.push({ startedAt: now, plannedMinutes: minutes, endsAt: breakUntil, overridden: false });
+  store.breaks.push({
+    startedAt: now,
+    plannedMinutes: minutes,
+    endsAt: breakUntil,
+    overridden: false,
+    armIndex: chosenArmIndex,
+    context,
+    trained: false,
+  });
   if (store.breaks.length > MAX_SESSIONS_LOGGED) store.breaks = store.breaks.slice(-MAX_SESSIONS_LOGGED);
   await setStore({ breakUntil, breaks: store.breaks });
 
@@ -486,14 +522,22 @@ async function startBreak(requestedMinutes) {
   // exempt from it either.
   for (const site of store.sites) await kickOutTabs(site.hostname);
 
-  return { breakUntil, minutes };
+  // Finalizes the bandit reward once it's knowable — either right away (an
+  // override) or here, at breakUntil plus the too-soon window, once there's
+  // been enough time to tell whether the break actually held. Named per
+  // break (not a fixed alarm name) so starting a second break inside the
+  // first one's too-soon window doesn't clobber the first one's pending check.
+  chrome.alarms.create(`breakFollowup:${now}`, { when: breakUntil + minutesToMs(store.settings.breakTooSoonWindowMin) });
+
+  return { ok: true, breakUntil, minutes, armIndex: chosenArmIndex };
 }
 
-// Cancels an active break early. Deliberately doesn't grant access to
-// anything by itself — it just lets the normal per-site flow (bandit
-// decision, cooldown, etc.) apply again on the next request, same as if no
-// break had ever started. Costs nothing on the bandit side: this isn't a
-// site-specific decision, so there's no reward or context to feed it.
+// Cancels an active break early. Doesn't grant access to anything by
+// itself — it just lets the normal per-site flow (bandit decision,
+// cooldown, etc.) apply again on the next request, same as if no break had
+// ever started. Does train the break-duration bandit, though: an override
+// is a real, decisive outcome (this duration was too long), scored by how
+// early it happened — see computeBreakReward in lib/config.js.
 async function overrideBreak() {
   const store = await getStore();
   const now = Date.now();
@@ -501,12 +545,59 @@ async function overrideBreak() {
     return { ok: false, error: 'no active break' };
   }
   const current = store.breaks[store.breaks.length - 1];
-  if (current && !current.endedAt) {
+  const toSave = { breakUntil: 0, breaks: store.breaks };
+  if (current && !current.trained) {
     current.endedAt = now;
     current.overridden = true;
+    current.trained = true;
+    if (typeof current.armIndex === 'number' && current.context) {
+      const plannedMs = minutesToMs(current.plannedMinutes);
+      const elapsedFrac = plannedMs > 0 ? (now - current.startedAt) / plannedMs : 0;
+      const reward = computeBreakReward('overridden', { elapsedFrac }, store.settings);
+      const bandit = getBreakBandit(store);
+      bandit.update(current.armIndex, current.context, reward);
+      toSave.breakBanditState = bandit.toJSON();
+    }
+    await chrome.alarms.clear(`breakFollowup:${current.startedAt}`);
   }
-  await setStore({ breakUntil: 0, breaks: store.breaks });
+  await setStore(toSave);
   return { ok: true };
+}
+
+// Fires breakTooSoonWindowMin after a break ended naturally (not
+// overridden — overriding trains and clears this alarm itself). Whether
+// the break "held" is judged from what's actually observable: did a
+// managed-site grant happen, or did another break start, before the
+// window closed? If so, this one wasn't long enough — scored by how soon
+// the return happened. If the window closed with no such activity, it's a
+// clean completion.
+async function onBreakFollowup(startedAtRaw) {
+  const startedAt = Number(startedAtRaw);
+  const store = await getStore();
+  const entry = store.breaks.find((b) => b.startedAt === startedAt && !b.trained);
+  if (!entry || typeof entry.armIndex !== 'number' || !entry.context) return;
+
+  const windowMs = minutesToMs(store.settings.breakTooSoonWindowMin);
+  const windowEnd = entry.endsAt + windowMs;
+  const reengagedAtCandidates = [
+    ...store.sessions.filter((s) => s.decision === 'grant' && s.grantedAt > entry.endsAt && s.grantedAt <= windowEnd).map((s) => s.grantedAt),
+    ...store.breaks.filter((b) => b !== entry && b.startedAt > entry.endsAt && b.startedAt <= windowEnd).map((b) => b.startedAt),
+  ];
+
+  let reward;
+  if (reengagedAtCandidates.length > 0) {
+    const reengagedAt = Math.min(...reengagedAtCandidates);
+    const shortfallFrac = 1 - (reengagedAt - entry.endsAt) / windowMs;
+    reward = computeBreakReward('too_short', { shortfallFrac }, store.settings);
+  } else {
+    reward = computeBreakReward('completed', {}, store.settings);
+  }
+
+  const bandit = getBreakBandit(store);
+  bandit.update(entry.armIndex, entry.context, reward);
+  entry.trained = true;
+
+  await setStore({ breaks: store.breaks, breakBanditState: bandit.toJSON() });
 }
 
 // ---- core decision logic -------------------------------------------------
@@ -850,19 +941,62 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
+        case 'RESET_BREAK_BANDIT': {
+          await setStore({ breakBanditState: null });
+          sendResponse({ ok: true });
+          break;
+        }
         case 'CLEAR_SESSIONS': {
           await setStore({ sessions: [] });
           sendResponse({ ok: true });
           break;
         }
         case 'START_BREAK': {
-          const result = await startBreak(msg.minutes);
-          sendResponse({ ok: true, ...result });
+          const result = await startBreak(msg.armIndex);
+          sendResponse(result);
           break;
         }
         case 'OVERRIDE_BREAK': {
           const result = await overrideBreak();
           sendResponse(result);
+          break;
+        }
+        case 'GET_BREAK_SUGGESTION': {
+          const store = await getStore();
+          const now = Date.now();
+          const eligible = eligibleBreakArmIndices(store.settings);
+          const { context, fatigue } = breakContext(store, now);
+          const bandit = getBreakBandit(store);
+          const scored = eligible
+            .map((armIndex) => ({ armIndex, durationMin: BREAK_DURATIONS_MIN[armIndex], ...bandit.arms[armIndex].score(context, store.settings.breakAlpha) }))
+            .sort((a, b) => b.ucb - a.ucb);
+          const best = scored[0] || null;
+
+          // The two neighboring eligible arms by duration, not by score —
+          // this is what lets the popup offer "shorter"/"longer" chips
+          // instead of a raw number field, per the suggested pick.
+          let alternatives = [];
+          if (best) {
+            const byDuration = eligible.slice().sort((a, b) => BREAK_DURATIONS_MIN[a] - BREAK_DURATIONS_MIN[b]);
+            const pos = byDuration.indexOf(best.armIndex);
+            alternatives = [byDuration[pos - 1], byDuration[pos + 1]]
+              .filter((i) => i !== undefined)
+              .map((armIndex) => ({ armIndex, durationMin: BREAK_DURATIONS_MIN[armIndex] }));
+          }
+
+          const activeBreak = !!(store.breakUntil && now < store.breakUntil);
+          const cooldownElapsed = now - store.lastBreakSuggestedAt >= minutesToMs(store.settings.breakSuggestCooldownMin);
+          const shouldSuggest = !activeBreak && !!best && fatigue.totalActiveMinLast24h >= store.settings.breakEffortThresholdMin && cooldownElapsed;
+          if (shouldSuggest) await setStore({ lastBreakSuggestedAt: now });
+
+          sendResponse({
+            suggestedArmIndex: best ? best.armIndex : null,
+            suggestedMinutes: best ? best.durationMin : null,
+            alternatives,
+            shouldSuggest,
+            effortMinutesToday: fatigue.totalActiveMinLast24h,
+            effortThresholdMin: store.settings.breakEffortThresholdMin,
+          });
           break;
         }
         case 'GET_BREAK_STATUS': {
@@ -885,6 +1019,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const bandit = getBanditFor(store, msg.hostname);
           const scores = bandit.arms.map((a, i) => ({ durationMin: store.settings.armDurationsMin[i], ...a.score(context, store.settings.alpha) }));
           sendResponse({ context, scores, trust: trustFor(store, msg.hostname, now) });
+          break;
+        }
+        case 'GET_BREAK_BANDIT_DEBUG': {
+          const store = await getStore();
+          const now = Date.now();
+          const { context, fatigue } = breakContext(store, now);
+          const bandit = getBreakBandit(store);
+          const eligible = eligibleBreakArmIndices(store.settings);
+          const scores = bandit.arms.map((a, i) => ({
+            durationMin: BREAK_DURATIONS_MIN[i],
+            eligible: eligible.includes(i),
+            ...a.score(context, store.settings.breakAlpha),
+          }));
+          sendResponse({ context, scores, effortMinutesToday: fatigue.totalActiveMinLast24h });
           break;
         }
         default:
