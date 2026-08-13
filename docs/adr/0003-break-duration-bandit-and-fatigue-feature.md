@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted (break-duration bandit design, pending implementation in the live
-extension) / Rejected (cross-site fatigue as a site-bandit context feature)
-— both based on simulation, not real usage data. See Consequences.
+Accepted and implemented (break-duration bandit) / Rejected (cross-site
+fatigue as a site-bandit context feature) — based on simulation, not real
+usage data. See Consequences and the Update below.
 
 ## Context
 
@@ -31,7 +31,7 @@ module.
 
 ## Decision
 
-### 1. Break-duration bandit — adopt the design, not yet implemented
+### 1. Break-duration bandit — adopted and implemented
 
 `eval/simulate_break.py` models a latent "actually needed" break length
 `T`, drawn each round from a distribution centered on a context-dependent
@@ -120,31 +120,48 @@ at this data volume.
 
 ## Consequences
 
-- **Nothing changed in the live extension yet.** Both findings are
-  design input for the break-duration bandit described in DESIGN.md's
-  "Take a break" section, not a shipped change — implementing the
-  break-duration bandit (its own `LinUCB` instance, arms, and settings in
-  `background.js`/`lib/config.js`, plus surfacing a suggested duration in
-  the popup) is separate follow-up work.
 - **The cross-site fatigue feature is not being added to the per-site
   bandit's context**, based on this evidence. This is a simulated,
   illustrative result, not a permanent verdict — if real exported session
   data later shows binge behavior clearly spanning multiple sites in a way
   the per-site context misses, this decision should be revisited against
   that data, not against this synthetic environment.
-- **The break-duration bandit, if implemented, needs its own alpha
-  default** — do not inherit `DEFAULT_ALPHA` or the 0001-tuned value from
-  the site bandit; they were tuned for a different reward scale and arm
-  set.
-- **Open question, deliberately not resolved here:** what "fatigue" should
-  be computed from in the real extension for the break bandit specifically
-  — total active minutes across all managed sites in the last 24h (cheap,
-  already close to data the bandit's own context stats track) vs. a
-  same-calendar-day total (matches this simulation's "resets at midnight"
-  model more literally, but calendar-day boundaries are an arbitrary
-  discretization of what's really a continuous fatigue process). Neither
-  choice was tested against the other here; whichever is implemented
-  should be documented as a choice, not left implicit.
+- **The break-duration bandit needed its own alpha default** — it does
+  not inherit `DEFAULT_ALPHA` or the 0001-tuned value from the site
+  bandit; see the Update below for what shipped.
 - **The two Python simulation modules must be kept in sync with the JS
   reward/context logic by hand**, same accepted maintenance cost as every
   other `eval/simulate_*` module (see 0001's Consequences).
+
+## Update — break-duration bandit implemented
+
+The design above shipped in the live extension:
+
+- `getBreakBandit` (`lib/background-helpers.js`) — a single global
+  `LinUCB` instance, arms fixed at `BREAK_DURATIONS_MIN`
+  (`lib/config.js`). `eligibleBreakArmIndices` filters which arms can be
+  suggested/selected against the current `breakMaxMin`, without resizing
+  the bandit itself — the "open question" above (calendar-day vs. rolling
+  24h) was resolved in favor of a rolling 24h window
+  (`globalFatigueStats`), since it needed no arbitrary day-boundary
+  discretization and was already the simplest thing to compute from
+  existing session timestamps.
+- `computeBreakReward` (`lib/config.js`) is the real (non-simulated)
+  counterpart to `sample_break_reward_batch` — no latent "actually
+  needed" duration to sample in reality, only what was actually observed:
+  overridden (immediate), too-soon-after (detected by
+  `onBreakFollowup`, an alarm scheduled `breakTooSoonWindowMin` past the
+  break's end that scans real session/break timestamps in that window),
+  or a clean completion.
+- `DEFAULT_BREAK_ALPHA = 0.15` shipped as the deliberately conservative
+  choice flagged as needed above — the middle of the 0.08–0.3 range this
+  ADR's simulation found performed similarly well, not the single best
+  value found.
+- The popup UI has no minutes input at all: `GET_BREAK_SUGGESTION`
+  returns the bandit's top pick plus its two nearest eligible duration
+  neighbors as chips, surfaced automatically once
+  `globalFatigueStats`'s rolling 24h total crosses
+  `breakEffortThresholdMin` (throttled by `breakSuggestCooldownMin`), or
+  on demand via a small link otherwise.
+
+See DESIGN.md's "Take a break" section for the full mechanism description.

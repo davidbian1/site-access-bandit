@@ -382,9 +382,9 @@ those need manual verification in an actual loaded extension.
   "why," starting with the `eval/`-backed ones (`0001`: the reward
   ceiling and alpha miscalibration; `0002`: the recency feature tested and
   rejected, cross-site warm-start tested and shipped; `0003`: a
-  break-duration bandit design tested and its reward shape validated, a
-  cross-site "fatigue" context feature for the *site* bandit tested and
-  rejected). `docs/adr/README.md` has the convention for proposing any
+  break-duration bandit tested and shipped, a cross-site "fatigue" context
+  feature for the *site* bandit tested and rejected). `docs/adr/README.md`
+  has the convention for proposing any
   future addition to `eval/`'s toolchain.
 - `notebooks/bandit_tuning.ipynb` — executes the `eval/tune.py` sweep and
   renders the regret-curve/reward-variant plots referenced in ADR 0001;
@@ -474,48 +474,91 @@ added to `manifest.json`.
 Everything above is reactive from the bandit's side (you show up, it
 decides) or an escape hatch you reach for after being denied (override,
 extend). Take a break is the one proactive mechanism: from the popup, you
-can block every managed site at once for a chosen number of minutes,
-before you're actually tempted, rather than relying on willpower or a
-fresh bandit decision in the moment.
+can block every managed site at once, before you're actually tempted,
+rather than relying on willpower or a fresh bandit decision in the moment.
 
-**The break's duration is currently typed in manually, not learned.**
-`docs/adr/0003-break-duration-bandit-and-fatigue-feature.md` designed and
-simulated a LinUCB bandit over candidate durations for this specifically —
-reward inferred from how a chosen duration actually held up (overridden
-early vs. run to completion vs. too short, needing another break soon
-after) rather than an added "rate this" prompt, which would cut against
-the low-friction design everywhere else in the extension. The simulation
-found the reward shape genuinely learnable (non-degenerate arm selection,
-a shrinking gap to the unobserved "ideal" duration over 400 rounds) and
-found that a per-user "fatigue" signal (time already spent across managed
-sites) is a strong predictor worth exposing to this bandit specifically —
-but it also found the site bandit's tuned alpha does *not* transfer to
-this one (different reward scale, different arm set) and that the
-analogous "fatigue" feature does *not* clearly help the *site* bandit's
-own context in the same simulation. **Not yet implemented** — this is a
-validated design, not a shipped feature; the duration input in the popup
-still just takes whatever you type, clamped to `breakMaxMin`.
+**The duration is a learned bandit decision, not typed in.** A second,
+global `LinUCB` instance (`getBreakBandit` in `lib/background-helpers.js`,
+`BREAK_DURATIONS_MIN = [10, 20, 30, 45, 60, 90, 120]` in `lib/config.js`)
+picks the suggested duration the same way the site bandit picks a grant
+duration — see
+`docs/adr/0003-break-duration-bandit-and-fatigue-feature.md` for the
+simulation this design is based on. There is no minutes input field
+anywhere in the UI; the popup only ever offers duration *chips* (the
+bandit's suggestion plus its two nearest eligible neighbors), and starting
+a break is a single click on one of them.
 
-It's a commitment device, not a bandit decision — `startBreak` and
-`overrideBreak` in `background.js` never call `bandit.update()` or touch
-`banditState`; there's no context vector or arm choice behind a break, so
-there's nothing honest to train on. `handleRequestAccess` and `CHECK_ACCESS`
-both check `store.breakUntil` before anything else — before grants,
-cooldowns, or grace credits — so a break supersedes all of them uniformly
+**Context comes from cross-site "fatigue," not the site bandit's own
+context.** `globalFatigueStats` (`lib/background-helpers.js`) rolls up
+total active minutes and session count across *every* managed site in the
+last 24h — deliberately not folded into the per-site bandit's own
+`buildContext` calls, since ADR 0003's simulation found that feature does
+NOT clearly help the per-site bandit, only this one, where fatigue is a
+much larger share of what actually drives the decision.
+
+**Reward is inferred from what actually happened, not an added rating
+prompt** (see `computeBreakReward` in `lib/config.js`):
+- **Overridden before it ended** (`overrideBreak` in `background.js`):
+  penalized, scaled by how early — breaking at minute 2 of 60 costs more
+  than breaking at minute 55. Trained immediately, and clears the
+  follow-up alarm below.
+- **Not overridden, but you were back on a managed site (or started
+  another break) within `breakTooSoonWindowMin` of it ending**: the break
+  wasn't long enough. A `breakFollowup:<startedAt>` alarm
+  (`onBreakFollowup`), scheduled when the break starts and fired
+  `breakTooSoonWindowMin` after it's due to end, scans real session and
+  break-start timestamps in that window — if it finds one, the reward is
+  penalized, scaled by how soon the return happened.
+- **Not overridden, no such activity within the window**: a clean
+  completion, the full bonus.
+
+This alarm-based, after-the-fact scan (rather than reacting the instant a
+new grant or break happens) is deliberate: the window itself is a fixed
+absolute time range regardless of when the alarm actually fires, so a
+late-firing alarm (extension briefly disabled, computer asleep) delays
+*when* the break gets trained, not *what* it gets trained on.
+
+**`breakMaxMin` filters which arms are selectable without resizing the
+bandit.** The candidate list itself never changes shape (persisted bandit
+state needs a stable arm count); `eligibleBreakArmIndices` filters it down
+to arms at or under the current cap at suggestion and selection time.
+
+**Surfacing is occasional, not a permanent form.** `GET_BREAK_SUGGESTION`
+returns `shouldSuggest: true` once today's cross-site total crosses
+`breakEffortThresholdMin`, throttled by `breakSuggestCooldownMin` so it
+doesn't nag on every popup open while the total stays elevated — the popup
+shows the duration chips automatically in that case. Otherwise, a small
+"Take a break" link reveals the same chips on demand, so taking a break is
+never blocked on the effort threshold actually being crossed.
+
+**Not (yet) validated against real usage.** ADR 0003's simulation found
+the reward shape learnable and non-degenerate in a synthetic environment;
+`DEFAULT_BREAK_ALPHA = 0.15` is a deliberately conservative pick from a
+0.08–0.3 range that all performed similarly well there, same "don't ship a
+synthetic optimum as a real default" reasoning as `DEFAULT_ALPHA` in ADR
+0001. It has not been tuned against real break-taking data, because there
+isn't any yet.
+
+**Committing to a break is still not a bandit decision, even though its
+length now is.** `handleRequestAccess` and `CHECK_ACCESS` both check
+`store.breakUntil` before anything else — before grants, cooldowns, or
+grace credits — so an active break supersedes all of them uniformly
 rather than needing special-cased exceptions at each site's own state.
 Starting one immediately ends any grant already in progress
 (`finalizeSession(hostname, 'break-started')`, which still trains the
-bandit normally — the time actually spent before the break started is
-real usage data) and kicks out any already-open tab on a managed site,
+*site* bandit normally — the time actually spent before the break started
+is real usage data) and kicks out any already-open tab on a managed site,
 including ones a lingering grace credit would otherwise have let through.
 
-Two constraints keep it from working against you or from being pointless:
+Two more constraints keep it from working against you or from being
+pointless:
 
 - **A hard cap on how long a single break can be**, `breakMaxMin` (default
-  180 minutes), enforced server-side (`clampBreakMinutes` in
-  `lib/config.js`) rather than trusted from whatever the popup's input
-  happened to send. This isn't a punishment mechanism — an unbounded break
-  could lock out a site you end up genuinely needing, with no bandit
+  180 minutes). Since the duration now comes from the bandit rather than a
+  typed number, this is enforced by `eligibleBreakArmIndices` filtering
+  which candidate arms can be suggested or selected at all, rather than by
+  clamping a raw input. This isn't a punishment mechanism — an unbounded
+  break could lock out a site you end up genuinely needing, with no bandit
   decision or override delay standing between you and that being a real
   problem, only the passage of time.
 - **A deliberately steeper override than any other in the extension.**
