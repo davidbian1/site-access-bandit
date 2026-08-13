@@ -379,11 +379,13 @@ those need manual verification in an actual loaded extension.
   justification" for why each dependency in `eval/requirements.txt` earned
   its place.
 - `docs/adr/` — Nygard-format decision records for changes worth a durable
-  "why," starting with the two `eval/`-backed ones (`0001`: the reward
+  "why," starting with the `eval/`-backed ones (`0001`: the reward
   ceiling and alpha miscalibration; `0002`: the recency feature tested and
-  rejected, cross-site warm-start tested and shipped). `docs/adr/README.md`
-  has the convention for proposing any future addition to `eval/`'s
-  toolchain.
+  rejected, cross-site warm-start tested and shipped; `0003`: a
+  break-duration bandit design tested and its reward shape validated, a
+  cross-site "fatigue" context feature for the *site* bandit tested and
+  rejected). `docs/adr/README.md` has the convention for proposing any
+  future addition to `eval/`'s toolchain.
 - `notebooks/bandit_tuning.ipynb` — executes the `eval/tune.py` sweep and
   renders the regret-curve/reward-variant plots referenced in ADR 0001;
   regenerated (not hand-edited) whenever the numbers change.
@@ -475,6 +477,24 @@ extend). Take a break is the one proactive mechanism: from the popup, you
 can block every managed site at once for a chosen number of minutes,
 before you're actually tempted, rather than relying on willpower or a
 fresh bandit decision in the moment.
+
+**The break's duration is currently typed in manually, not learned.**
+`docs/adr/0003-break-duration-bandit-and-fatigue-feature.md` designed and
+simulated a LinUCB bandit over candidate durations for this specifically —
+reward inferred from how a chosen duration actually held up (overridden
+early vs. run to completion vs. too short, needing another break soon
+after) rather than an added "rate this" prompt, which would cut against
+the low-friction design everywhere else in the extension. The simulation
+found the reward shape genuinely learnable (non-degenerate arm selection,
+a shrinking gap to the unobserved "ideal" duration over 400 rounds) and
+found that a per-user "fatigue" signal (time already spent across managed
+sites) is a strong predictor worth exposing to this bandit specifically —
+but it also found the site bandit's tuned alpha does *not* transfer to
+this one (different reward scale, different arm set) and that the
+analogous "fatigue" feature does *not* clearly help the *site* bandit's
+own context in the same simulation. **Not yet implemented** — this is a
+validated design, not a shipped feature; the duration input in the popup
+still just takes whatever you type, clamped to `breakMaxMin`.
 
 It's a commitment device, not a bandit decision — `startBreak` and
 `overrideBreak` in `background.js` never call `bandit.update()` or touch
