@@ -88,32 +88,73 @@ async function render() {
 // it early is deliberately only available from a site's blocked page (same
 // wait-then-hold friction as any other override), not from this popup, so
 // backing out takes the same real effort as it does everywhere else.
-async function renderBreak() {
-  const status = await chrome.runtime.sendMessage({ type: 'GET_BREAK_STATUS' });
-  const activeEl = document.getElementById('breakActive');
-  const formEl = document.getElementById('breakForm');
-  const minutesInput = document.getElementById('breakMinutes');
-  minutesInput.max = status.maxMinutes;
-  minutesInput.placeholder = `up to ${status.maxMinutes}`;
+//
+// The duration itself is never typed in — GET_BREAK_SUGGESTION returns the
+// break-duration bandit's current pick plus its two nearest eligible
+// neighbors, and starting one is a single click on a duration chip. The
+// section stays hidden by default; it surfaces on its own once today's
+// cross-site usage crosses breakEffortThresholdMin (see
+// docs/adr/0003-break-duration-bandit-and-fatigue-feature.md), or can be
+// opened on demand via the small "Take a break" link either way.
+const activeEl = document.getElementById('breakActive');
+const suggestionEl = document.getElementById('breakSuggestion');
+const promptEl = document.getElementById('breakPrompt');
+const chipsEl = document.getElementById('breakChips');
+const breakLink = document.getElementById('breakLink');
 
-  if (status.active) {
-    formEl.style.display = 'none';
-    activeEl.style.display = 'block';
-    const remainingMin = Math.max(1, Math.ceil((status.breakUntil - Date.now()) / 60000));
-    activeEl.textContent = `On a break — ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining. All managed sites are blocked; ending it early is only available from a site's blocked page.`;
-  } else {
-    formEl.style.display = 'flex';
-    activeEl.style.display = 'none';
+function renderChips(suggestion, promptText) {
+  promptEl.textContent = promptText;
+  chipsEl.innerHTML = '';
+  const options = [suggestion.suggestedArmIndex, ...suggestion.alternatives.map((a) => a.armIndex)]
+    .map((armIndex) => {
+      if (armIndex === suggestion.suggestedArmIndex) return { armIndex, durationMin: suggestion.suggestedMinutes, suggested: true };
+      return suggestion.alternatives.find((a) => a.armIndex === armIndex);
+    })
+    .sort((a, b) => a.durationMin - b.durationMin);
+
+  for (const opt of options) {
+    const chip = document.createElement('button');
+    chip.className = opt.suggested ? 'chip suggested' : 'chip';
+    chip.textContent = `${opt.durationMin} min`;
+    chip.addEventListener('click', async () => {
+      await chrome.runtime.sendMessage({ type: 'START_BREAK', armIndex: opt.armIndex });
+      render();
+      renderBreak();
+    });
+    chipsEl.appendChild(chip);
   }
+  suggestionEl.style.display = 'block';
+  breakLink.style.display = 'none';
 }
 
-document.getElementById('startBreakBtn').addEventListener('click', async () => {
-  const minutes = parseInt(document.getElementById('breakMinutes').value, 10);
-  if (!minutes || minutes <= 0) return;
-  await chrome.runtime.sendMessage({ type: 'START_BREAK', minutes });
-  render();
-  renderBreak();
-});
+async function renderBreak() {
+  const status = await chrome.runtime.sendMessage({ type: 'GET_BREAK_STATUS' });
+
+  if (status.active) {
+    activeEl.style.display = 'block';
+    suggestionEl.style.display = 'none';
+    breakLink.style.display = 'none';
+    const remainingMin = Math.max(1, Math.ceil((status.breakUntil - Date.now()) / 60000));
+    activeEl.textContent = `On a break — ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining. Ending it early is only available from a site's blocked page.`;
+    return;
+  }
+  activeEl.style.display = 'none';
+  suggestionEl.style.display = 'none';
+
+  const suggestion = await chrome.runtime.sendMessage({ type: 'GET_BREAK_SUGGESTION' });
+  if (suggestion.suggestedArmIndex === null) {
+    breakLink.style.display = 'none'; // no break duration fits the configured cap
+    return;
+  }
+
+  if (suggestion.shouldSuggest) {
+    const usedMin = Math.round(suggestion.effortMinutesToday);
+    renderChips(suggestion, `You've spent about ${usedMin} min on managed sites today — take a break?`);
+  } else {
+    breakLink.style.display = 'inline-block';
+    breakLink.onclick = () => renderChips(suggestion, 'Suggested break, based on what has held up before:');
+  }
+}
 
 render();
 renderBreak();
