@@ -43,6 +43,11 @@ works — the algorithm, the reward function, every formula and default,
 the code layout, and how to run the tests — see
 **[DESIGN.md](DESIGN.md)**.
 
+## What's left before this ships publicly?
+
+**[ROADMAP.md](ROADMAP.md)** — manual QA, real-data calibration, Web
+Store packaging, CD, and a beta rollout plan, in that order.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
