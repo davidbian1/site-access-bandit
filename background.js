@@ -16,9 +16,9 @@ import {
   decayedTrust,
   applyTrustDiscount,
   consumeGrace,
-  BREAK_DURATIONS_MIN,
-  eligibleBreakArmIndices,
-  computeBreakReward,
+  FREE_TIME_DURATIONS_MIN,
+  eligibleFreeTimeArmIndices,
+  computeFreeTimeReward,
   AUTH_SUBDOMAIN_PREFIXES,
   authSubdomainHostnames,
   isAuthSubdomain,
@@ -33,11 +33,13 @@ import {
   getBanditFor,
   estimateExposureMinutes,
   globalFatigueStats,
-  getBreakBandit,
+  globalFrictionCount24h,
+  getFreeTimeBandit,
 } from './lib/background-helpers.js';
 
 const TICK_ALARM = 'tick';
 const HEARTBEAT_ALARM = 'heartbeat';
+const FREE_TIME_EXPIRE_ALARM = 'freeTimeExpire';
 
 // ---- storage helpers -------------------------------------------------
 
@@ -55,10 +57,10 @@ async function getStore() {
     'lastRequestAt',
     'nextRuleId',
     'lastHeartbeat',
-    'breakUntil',
-    'breaks',
-    'breakBanditState',
-    'lastBreakSuggestedAt',
+    'freeTimeUntil',
+    'freeTimeWindows',
+    'freeTimeBanditState',
+    'lastFreeTimeSuggestedAt',
   ]);
   return {
     sites: data.sites || [],
@@ -73,10 +75,10 @@ async function getStore() {
     lastRequestAt: data.lastRequestAt || {},
     nextRuleId: data.nextRuleId || 1,
     lastHeartbeat: data.lastHeartbeat || 0,
-    breakUntil: data.breakUntil || 0,
-    breaks: data.breaks || [],
-    breakBanditState: data.breakBanditState || null,
-    lastBreakSuggestedAt: data.lastBreakSuggestedAt || 0,
+    freeTimeUntil: data.freeTimeUntil || 0,
+    freeTimeWindows: data.freeTimeWindows || [],
+    freeTimeBanditState: data.freeTimeBanditState || null,
+    lastFreeTimeSuggestedAt: data.lastFreeTimeSuggestedAt || 0,
   };
 }
 
@@ -91,13 +93,19 @@ async function setStore(partial) {
 // ---- declarativeNetRequest rule management ----------------------------
 
 async function rebuildBlockRules() {
-  const { sites, grants, ruleIds, nextRuleId } = await getStore();
+  const { sites, grants, ruleIds, nextRuleId, freeTimeUntil } = await getStore();
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing.map((r) => r.id);
 
   let nextId = nextRuleId;
   const addRules = [];
-  for (const site of sites) {
+  // Free time suspends gating entirely, at the network level, not just at
+  // the CHECK_ACCESS/handleRequestAccess layer — a fresh top-level
+  // navigation to any managed site during a free-time window should never
+  // hit blocked.html at all, which means no site gets a block rule while
+  // one is active. See the "free time" section below for why this exists.
+  const freeTimeActive = freeTimeUntil && Date.now() < freeTimeUntil;
+  for (const site of freeTimeActive ? [] : sites) {
     if (grants[site.hostname]) continue; // currently granted — leave unblocked
     const assign = await ruleIdFor(site.hostname, ruleIds, nextId);
     nextId = assign.nextRuleId;
@@ -508,142 +516,150 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     onHeartbeat();
   } else if (alarm.name.startsWith('expire:')) {
     handleExpiry(alarm.name.slice('expire:'.length));
-  } else if (alarm.name.startsWith('breakFollowup:')) {
-    onBreakFollowup(alarm.name.slice('breakFollowup:'.length));
+  } else if (alarm.name === FREE_TIME_EXPIRE_ALARM) {
+    rebuildBlockRules(); // freeTimeUntil has passed; restores normal gating
+  } else if (alarm.name.startsWith('freeTimeFollowup:')) {
+    onFreeTimeFollowup(alarm.name.slice('freeTimeFollowup:'.length));
   }
 });
 
-// ---- take a break ---------------------------------------------------------
-// A proactive, global block across every managed site, initiated by the
-// user rather than decided by the bandit — see DEFAULT_BREAK_MAX_MIN's
-// comment in lib/config.js for why it's capped and why overriding it is
-// deliberately harder than an ordinary per-site override. Its *duration* is
-// a bandit decision, same as a site's grant duration — see
-// docs/adr/0003-break-duration-bandit-and-fatigue-feature.md.
+// ---- free time --------------------------------------------------------
+// A proactive, global suspension of gating across every managed site,
+// initiated by the user rather than decided by the bandit — see
+// DEFAULT_FREE_TIME_MAX_MIN's comment in lib/config.js for the full
+// rationale (this replaced an earlier design that blocked every site
+// instead — see docs/adr/0003's Update section). Its *duration* is a
+// bandit decision, same as a site's grant duration.
 
-function breakContext(store, now) {
+function freeTimeContext(store, now) {
   const fatigue = globalFatigueStats(store.sessions, now);
   const context = buildContext(new Date(now), { sessionsLast24h: fatigue.sessionsLast24h, avgRecentActiveMin: fatigue.totalActiveMinLast24h });
   return { context, fatigue };
 }
 
-// armIndex should come from GET_BREAK_SUGGESTION (the popup never sends a
-// raw minute count) — falls back to the shortest eligible arm if it's
-// missing or no longer valid (e.g. breakMaxMin shrank since the suggestion
-// was fetched), rather than rejecting the request outright.
-async function startBreak(armIndex) {
+// armIndex should come from GET_FREE_TIME_SUGGESTION (the popup never
+// sends a raw minute count) — falls back to the shortest eligible arm if
+// it's missing or no longer valid (e.g. freeTimeMaxMin shrank since the
+// suggestion was fetched), rather than rejecting the request outright.
+async function startFreeTime(armIndex) {
   let store = await getStore();
   const now = Date.now();
-  const eligible = eligibleBreakArmIndices(store.settings);
+  const eligible = eligibleFreeTimeArmIndices(store.settings);
   const chosenArmIndex = eligible.includes(armIndex) ? armIndex : eligible[0];
   if (chosenArmIndex === undefined) {
-    return { ok: false, error: 'no break duration fits the configured cap' };
+    return { ok: false, error: 'no free-time duration fits the configured cap' };
   }
-  const { context } = breakContext(store, now);
-  const minutes = BREAK_DURATIONS_MIN[chosenArmIndex];
-  const breakUntil = now + minutesToMs(minutes);
+  const { context } = freeTimeContext(store, now);
+  const minutes = FREE_TIME_DURATIONS_MIN[chosenArmIndex];
+  const freeTimeUntil = now + minutesToMs(minutes);
 
-  // A break starting mid-session should actually end that session, not just
-  // block whatever comes next — finalizeSession also clears the site's
-  // block rule exemption and kicks its tabs back to the blocked page.
+  // A grant already in progress is still a real bandit decision that
+  // happened — finalize it so it trains the site bandit normally on the
+  // usage up to this point, rather than leaving it dangling under a
+  // window where gating doesn't apply anyway.
   for (const hostname of Object.keys(store.grants)) {
-    await finalizeSession(hostname, 'break-started');
+    await finalizeSession(hostname, 'free-time-started');
   }
 
   store = await getStore();
-  store.breaks.push({
+  store.freeTimeWindows.push({
     startedAt: now,
     plannedMinutes: minutes,
-    endsAt: breakUntil,
-    overridden: false,
+    endsAt: freeTimeUntil,
+    endedEarly: false,
     armIndex: chosenArmIndex,
     context,
     trained: false,
   });
-  if (store.breaks.length > MAX_SESSIONS_LOGGED) store.breaks = store.breaks.slice(-MAX_SESSIONS_LOGGED);
-  await setStore({ breakUntil, breaks: store.breaks });
+  if (store.freeTimeWindows.length > MAX_SESSIONS_LOGGED) store.freeTimeWindows = store.freeTimeWindows.slice(-MAX_SESSIONS_LOGGED);
+  await setStore({ freeTimeUntil, freeTimeWindows: store.freeTimeWindows });
+  await rebuildBlockRules(); // clears every site's block rule immediately, not just on the next unrelated rebuild
 
-  // Grants are already gone, but a lingering grace credit or an already-open
-  // tab on a managed site (loaded before the break started) shouldn't be
-  // exempt from it either.
-  for (const site of store.sites) await kickOutTabs(site.hostname);
+  // Two alarms: one restores normal gating right at the natural end (fixed
+  // name — a second free-time window starting before the first ends just
+  // reschedules this one to the new end time, which is exactly what should
+  // happen), the other finalizes the bandit reward once there's been
+  // enough time to tell whether the window actually held — named per
+  // window so a second window starting inside the first one's too-short
+  // check doesn't clobber the first one's pending training.
+  chrome.alarms.create(FREE_TIME_EXPIRE_ALARM, { when: freeTimeUntil });
+  chrome.alarms.create(`freeTimeFollowup:${now}`, { when: freeTimeUntil + minutesToMs(store.settings.freeTimeTooShortWindowMin) });
 
-  // Finalizes the bandit reward once it's knowable — either right away (an
-  // override) or here, at breakUntil plus the too-soon window, once there's
-  // been enough time to tell whether the break actually held. Named per
-  // break (not a fixed alarm name) so starting a second break inside the
-  // first one's too-soon window doesn't clobber the first one's pending check.
-  chrome.alarms.create(`breakFollowup:${now}`, { when: breakUntil + minutesToMs(store.settings.breakTooSoonWindowMin) });
-
-  return { ok: true, breakUntil, minutes, armIndex: chosenArmIndex };
+  return { ok: true, freeTimeUntil, minutes, armIndex: chosenArmIndex };
 }
 
-// Cancels an active break early. Doesn't grant access to anything by
-// itself — it just lets the normal per-site flow (bandit decision,
-// cooldown, etc.) apply again on the next request, same as if no break had
-// ever started. Does train the break-duration bandit, though: an override
-// is a real, decisive outcome (this duration was too long), scored by how
-// early it happened — see computeBreakReward in lib/config.js.
-async function overrideBreak() {
+// Ends free time early — deliberately frictionless, no wait or hold,
+// unlike every other "back out of this" control in the extension. Choosing
+// to re-enable your own gating early is a disciplined act, not a relapse;
+// see DEFAULT_FREE_TIME_MAX_MIN's comment in lib/config.js. Still trains
+// the free-time-duration bandit: how much of the window was actually used
+// before ending it is real calibration signal, just never a penalty — see
+// computeFreeTimeReward in lib/config.js.
+async function endFreeTimeNow() {
   const store = await getStore();
   const now = Date.now();
-  if (!store.breakUntil || now >= store.breakUntil) {
-    return { ok: false, error: 'no active break' };
+  if (!store.freeTimeUntil || now >= store.freeTimeUntil) {
+    return { ok: false, error: 'no active free-time window' };
   }
-  const current = store.breaks[store.breaks.length - 1];
-  const toSave = { breakUntil: 0, breaks: store.breaks };
+  const current = store.freeTimeWindows[store.freeTimeWindows.length - 1];
+  const toSave = { freeTimeUntil: 0, freeTimeWindows: store.freeTimeWindows };
   if (current && !current.trained) {
     current.endedAt = now;
-    current.overridden = true;
+    current.endedEarly = true;
     current.trained = true;
     if (typeof current.armIndex === 'number' && current.context) {
       const plannedMs = minutesToMs(current.plannedMinutes);
       const elapsedFrac = plannedMs > 0 ? (now - current.startedAt) / plannedMs : 0;
-      const reward = computeBreakReward('overridden', { elapsedFrac }, store.settings);
-      const bandit = getBreakBandit(store);
+      const reward = computeFreeTimeReward('ended_early', { elapsedFrac }, store.settings);
+      const bandit = getFreeTimeBandit(store);
       bandit.update(current.armIndex, current.context, reward);
-      toSave.breakBanditState = bandit.toJSON();
+      toSave.freeTimeBanditState = bandit.toJSON();
     }
-    await chrome.alarms.clear(`breakFollowup:${current.startedAt}`);
+    await chrome.alarms.clear(`freeTimeFollowup:${current.startedAt}`);
   }
+  await chrome.alarms.clear(FREE_TIME_EXPIRE_ALARM);
   await setStore(toSave);
+  await rebuildBlockRules(); // restores normal gating immediately
   return { ok: true };
 }
 
-// Fires breakTooSoonWindowMin after a break ended naturally (not
-// overridden — overriding trains and clears this alarm itself). Whether
-// the break "held" is judged from what's actually observable: did a
-// managed-site grant happen, or did another break start, before the
+// Fires freeTimeTooShortWindowMin after a free-time window ended naturally
+// (ending early trains and clears this alarm itself). Whether the window
+// was long enough is judged from what's actually observable: did gating
+// push back again (a denial, or an override — either means friction
+// returned) or did another free-time window start, before the check
 // window closed? If so, this one wasn't long enough — scored by how soon
-// the return happened. If the window closed with no such activity, it's a
-// clean completion.
-async function onBreakFollowup(startedAtRaw) {
+// that happened. If the window closed with no such friction, it's a clean
+// completion.
+async function onFreeTimeFollowup(startedAtRaw) {
   const startedAt = Number(startedAtRaw);
   const store = await getStore();
-  const entry = store.breaks.find((b) => b.startedAt === startedAt && !b.trained);
+  const entry = store.freeTimeWindows.find((w) => w.startedAt === startedAt && !w.trained);
   if (!entry || typeof entry.armIndex !== 'number' || !entry.context) return;
 
-  const windowMs = minutesToMs(store.settings.breakTooSoonWindowMin);
+  const windowMs = minutesToMs(store.settings.freeTimeTooShortWindowMin);
   const windowEnd = entry.endsAt + windowMs;
-  const reengagedAtCandidates = [
-    ...store.sessions.filter((s) => s.decision === 'grant' && s.grantedAt > entry.endsAt && s.grantedAt <= windowEnd).map((s) => s.grantedAt),
-    ...store.breaks.filter((b) => b !== entry && b.startedAt > entry.endsAt && b.startedAt <= windowEnd).map((b) => b.startedAt),
+  const frictionAtCandidates = [
+    ...store.sessions
+      .filter((s) => (s.decision === 'deny' || s.overridden) && s.grantedAt > entry.endsAt && s.grantedAt <= windowEnd)
+      .map((s) => s.grantedAt),
+    ...store.freeTimeWindows.filter((w) => w !== entry && w.startedAt > entry.endsAt && w.startedAt <= windowEnd).map((w) => w.startedAt),
   ];
 
   let reward;
-  if (reengagedAtCandidates.length > 0) {
-    const reengagedAt = Math.min(...reengagedAtCandidates);
-    const shortfallFrac = 1 - (reengagedAt - entry.endsAt) / windowMs;
-    reward = computeBreakReward('too_short', { shortfallFrac }, store.settings);
+  if (frictionAtCandidates.length > 0) {
+    const frictionAt = Math.min(...frictionAtCandidates);
+    const shortfallFrac = 1 - (frictionAt - entry.endsAt) / windowMs;
+    reward = computeFreeTimeReward('too_short', { shortfallFrac }, store.settings);
   } else {
-    reward = computeBreakReward('completed', {}, store.settings);
+    reward = computeFreeTimeReward('completed', {}, store.settings);
   }
 
-  const bandit = getBreakBandit(store);
+  const bandit = getFreeTimeBandit(store);
   bandit.update(entry.armIndex, entry.context, reward);
   entry.trained = true;
 
-  await setStore({ breaks: store.breaks, breakBanditState: bandit.toJSON() });
+  await setStore({ freeTimeWindows: store.freeTimeWindows, freeTimeBanditState: bandit.toJSON() });
 }
 
 // ---- core decision logic -------------------------------------------------
@@ -652,8 +668,15 @@ async function handleRequestAccess(hostname, targetUrl, { skipCooldown = false }
   let store = await getStore();
   const now = Date.now();
 
-  if (store.breakUntil && now < store.breakUntil) {
-    return { granted: false, onBreak: true, breakUntil: store.breakUntil };
+  // Free time already suspends every site's block rule at the DNR level
+  // (rebuildBlockRules), so blocked.html shouldn't even load during a
+  // window — this is a defensive fallback for a race right at the edges
+  // of a window, not the primary mechanism. Unconditionally granted, no
+  // bandit/cooldown state touched: a stray request during free time isn't
+  // a real decision to train on.
+  if (store.freeTimeUntil && now < store.freeTimeUntil) {
+    const durationMin = Math.max(1, Math.round((store.freeTimeUntil - now) / 60000));
+    return { granted: true, durationMin, targetUrl, freeTime: true };
   }
 
   if (store.grants[hostname]) {
@@ -901,12 +924,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'CHECK_ACCESS': {
           const store = await getStore();
           const now = Date.now();
-          if (store.breakUntil && now < store.breakUntil) {
-            // Deliberately doesn't touch grace: a break overrides everything
-            // else, including a credit that would otherwise let a
-            // navigation straight through — spending a hop of it here would
-            // both fail to load the page and burn the credit for nothing.
-            sendResponse({ granted: false, grace: false, onBreak: true, breakUntil: store.breakUntil });
+          if (store.freeTimeUntil && now < store.freeTimeUntil) {
+            // Deliberately doesn't touch grace or consume anything — free
+            // time overrides every other gating mechanism uniformly rather
+            // than needing special-cased exceptions per credit type, and
+            // per-navigation re-gating simply doesn't apply during a window.
+            sendResponse({ granted: true, grace: false, freeTime: true });
             break;
           }
           // A grant that's still sitting in storage isn't necessarily still
@@ -987,8 +1010,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
-        case 'RESET_BREAK_BANDIT': {
-          await setStore({ breakBanditState: null });
+        case 'RESET_FREE_TIME_BANDIT': {
+          await setStore({ freeTimeBanditState: null });
           sendResponse({ ok: true });
           break;
         }
@@ -997,24 +1020,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
-        case 'START_BREAK': {
-          const result = await startBreak(msg.armIndex);
+        case 'START_FREE_TIME': {
+          const result = await startFreeTime(msg.armIndex);
           sendResponse(result);
           break;
         }
-        case 'OVERRIDE_BREAK': {
-          const result = await overrideBreak();
+        case 'END_FREE_TIME': {
+          const result = await endFreeTimeNow();
           sendResponse(result);
           break;
         }
-        case 'GET_BREAK_SUGGESTION': {
+        case 'GET_FREE_TIME_SUGGESTION': {
           const store = await getStore();
           const now = Date.now();
-          const eligible = eligibleBreakArmIndices(store.settings);
-          const { context, fatigue } = breakContext(store, now);
-          const bandit = getBreakBandit(store);
+          const eligible = eligibleFreeTimeArmIndices(store.settings);
+          const { context } = freeTimeContext(store, now);
+          const bandit = getFreeTimeBandit(store);
           const scored = eligible
-            .map((armIndex) => ({ armIndex, durationMin: BREAK_DURATIONS_MIN[armIndex], ...bandit.arms[armIndex].score(context, store.settings.breakAlpha) }))
+            .map((armIndex) => ({ armIndex, durationMin: FREE_TIME_DURATIONS_MIN[armIndex], ...bandit.arms[armIndex].score(context, store.settings.freeTimeAlpha) }))
             .sort((a, b) => b.ucb - a.ucb);
           const best = scored[0] || null;
 
@@ -1023,37 +1046,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // instead of a raw number field, per the suggested pick.
           let alternatives = [];
           if (best) {
-            const byDuration = eligible.slice().sort((a, b) => BREAK_DURATIONS_MIN[a] - BREAK_DURATIONS_MIN[b]);
+            const byDuration = eligible.slice().sort((a, b) => FREE_TIME_DURATIONS_MIN[a] - FREE_TIME_DURATIONS_MIN[b]);
             const pos = byDuration.indexOf(best.armIndex);
             alternatives = [byDuration[pos - 1], byDuration[pos + 1]]
               .filter((i) => i !== undefined)
-              .map((armIndex) => ({ armIndex, durationMin: BREAK_DURATIONS_MIN[armIndex] }));
+              .map((armIndex) => ({ armIndex, durationMin: FREE_TIME_DURATIONS_MIN[armIndex] }));
           }
 
-          const activeBreak = !!(store.breakUntil && now < store.breakUntil);
-          const cooldownElapsed = now - store.lastBreakSuggestedAt >= minutesToMs(store.settings.breakSuggestCooldownMin);
-          const shouldSuggest = !activeBreak && !!best && fatigue.totalActiveMinLast24h >= store.settings.breakEffortThresholdMin && cooldownElapsed;
-          if (shouldSuggest) await setStore({ lastBreakSuggestedAt: now });
+          const active = !!(store.freeTimeUntil && now < store.freeTimeUntil);
+          const cooldownElapsed = now - store.lastFreeTimeSuggestedAt >= minutesToMs(store.settings.freeTimeSuggestCooldownMin);
+          const frictionToday = globalFrictionCount24h(store.sessions, now);
+          const shouldSuggest = !active && !!best && frictionToday >= store.settings.freeTimeFrictionThreshold && cooldownElapsed;
+          if (shouldSuggest) await setStore({ lastFreeTimeSuggestedAt: now });
 
           sendResponse({
             suggestedArmIndex: best ? best.armIndex : null,
             suggestedMinutes: best ? best.durationMin : null,
             alternatives,
             shouldSuggest,
-            effortMinutesToday: fatigue.totalActiveMinLast24h,
-            effortThresholdMin: store.settings.breakEffortThresholdMin,
+            frictionToday,
+            frictionThreshold: store.settings.freeTimeFrictionThreshold,
           });
           break;
         }
-        case 'GET_BREAK_STATUS': {
+        case 'GET_FREE_TIME_STATUS': {
           const store = await getStore();
           const now = Date.now();
           sendResponse({
-            active: !!(store.breakUntil && now < store.breakUntil),
-            breakUntil: store.breakUntil,
-            maxMinutes: store.settings.breakMaxMin,
-            overrideDelaySec: store.settings.breakOverrideDelaySec,
-            overrideHoldMs: store.settings.breakOverrideHoldMs,
+            active: !!(store.freeTimeUntil && now < store.freeTimeUntil),
+            freeTimeUntil: store.freeTimeUntil,
+            maxMinutes: store.settings.freeTimeMaxMin,
           });
           break;
         }
@@ -1067,18 +1089,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ context, scores, trust: trustFor(store, msg.hostname, now) });
           break;
         }
-        case 'GET_BREAK_BANDIT_DEBUG': {
+        case 'GET_FREE_TIME_BANDIT_DEBUG': {
           const store = await getStore();
           const now = Date.now();
-          const { context, fatigue } = breakContext(store, now);
-          const bandit = getBreakBandit(store);
-          const eligible = eligibleBreakArmIndices(store.settings);
+          const { context, fatigue } = freeTimeContext(store, now);
+          const bandit = getFreeTimeBandit(store);
+          const eligible = eligibleFreeTimeArmIndices(store.settings);
           const scores = bandit.arms.map((a, i) => ({
-            durationMin: BREAK_DURATIONS_MIN[i],
+            durationMin: FREE_TIME_DURATIONS_MIN[i],
             eligible: eligible.includes(i),
-            ...a.score(context, store.settings.breakAlpha),
+            ...a.score(context, store.settings.freeTimeAlpha),
           }));
-          sendResponse({ context, scores, effortMinutesToday: fatigue.totalActiveMinLast24h });
+          sendResponse({ context, scores, effortMinutesToday: fatigue.totalActiveMinLast24h, frictionToday: globalFrictionCount24h(store.sessions, now) });
           break;
         }
         default:
