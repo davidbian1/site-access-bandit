@@ -23,16 +23,17 @@
   #currentSite { margin-bottom: 14px; padding: 10px; border-radius: 8px; background: #1e2126; }
   #sites { max-height: 160px; overflow-y: auto; margin-bottom: 10px; }
   a { color: #8ab4f8; font-size: 12px; }
-  #breakSection { margin-top: 14px; padding-top: 12px; border-top: 1px solid #262a31; min-height: 4px; }
-  #breakActive { padding: 8px; border-radius: 8px; background: #1e2126; line-height: 1.4; font-size: 12px; }
-  #breakPrompt { color: #a9adb4; font-size: 12px; margin-bottom: 6px; line-height: 1.4; }
-  #breakChips { display: flex; gap: 6px; flex-wrap: wrap; }
+  #freeTimeSection { margin-top: 14px; padding-top: 12px; border-top: 1px solid #262a31; min-height: 4px; }
+  #freeTimeActive { padding: 8px; border-radius: 8px; background: #1e2126; line-height: 1.4; font-size: 12px; }
+  #endFreeTimeBtn { margin-top: 8px; }
+  #freeTimePrompt { color: #a9adb4; font-size: 12px; margin-bottom: 6px; line-height: 1.4; }
+  #freeTimeChips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip {
     background: #1e2126; border: 1px solid #333844; color: #e8e8ec;
     border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 600;
   }
   .chip.suggested { background: #8ab4f8; color: #14161a; border-color: #8ab4f8; }
-  #breakLink {
+  #freeTimeLink {
     background: none; border: none; color: #8ab4f8; font-size: 12px; font-weight: 400;
     padding: 0; cursor: pointer; text-decoration: underline;
   }
@@ -44,13 +45,16 @@
   <h2>Managed sites</h2>
   <div id="sites"></div>
 
-  <div id="breakSection">
-    <div id="breakActive" class="muted" style="display:none;"></div>
-    <div id="breakSuggestion" style="display:none;">
-      <div id="breakPrompt"></div>
-      <div id="breakChips"></div>
+  <div id="freeTimeSection">
+    <div id="freeTimeActive" class="muted" style="display:none;">
+      <div id="freeTimeActiveText"></div>
+      <button id="endFreeTimeBtn" class="danger">End free time now</button>
     </div>
-    <button id="breakLink" style="display:none;">Take a break</button>
+    <div id="freeTimeSuggestion" style="display:none;">
+      <div id="freeTimePrompt"></div>
+      <div id="freeTimeChips"></div>
+    </div>
+    <button id="freeTimeLink" style="display:none;">Free time</button>
   </div>
 
   <a href="options.html" target="_blank">Open full settings &amp; history</a>

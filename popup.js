@@ -83,24 +83,28 @@ async function render() {
   }
 }
 
-// Blocks every managed site at once, initiated by the user rather than the
-// bandit — see DEFAULT_BREAK_MAX_MIN's comment in lib/config.js. Overriding
-// it early is deliberately only available from a site's blocked page (same
-// wait-then-hold friction as any other override), not from this popup, so
-// backing out takes the same real effort as it does everywhere else.
+// Suspends gating across every managed site at once, initiated by the
+// user rather than the bandit — see DEFAULT_FREE_TIME_MAX_MIN's comment
+// in lib/config.js (and docs/adr/0003's Update section for why this
+// replaced an earlier design that blocked instead of granted). Ending it
+// early is deliberately frictionless — right here, one click, no wait or
+// hold — since choosing to re-enable your own gating early is a
+// disciplined act, not something that needs to cost effort.
 //
-// The duration itself is never typed in — GET_BREAK_SUGGESTION returns the
-// break-duration bandit's current pick plus its two nearest eligible
-// neighbors, and starting one is a single click on a duration chip. The
-// section stays hidden by default; it surfaces on its own once today's
-// cross-site usage crosses breakEffortThresholdMin (see
-// docs/adr/0003-break-duration-bandit-and-fatigue-feature.md), or can be
-// opened on demand via the small "Take a break" link either way.
-const activeEl = document.getElementById('breakActive');
-const suggestionEl = document.getElementById('breakSuggestion');
-const promptEl = document.getElementById('breakPrompt');
-const chipsEl = document.getElementById('breakChips');
-const breakLink = document.getElementById('breakLink');
+// The duration itself is never typed in — GET_FREE_TIME_SUGGESTION
+// returns the free-time-duration bandit's current pick plus its two
+// nearest eligible neighbors, and starting one is a single click on a
+// duration chip. The section stays hidden by default; it surfaces on its
+// own once today's friction (denials/overrides across all sites) crosses
+// freeTimeFrictionThreshold, or can be opened on demand via the small
+// "Free time" link either way.
+const activeEl = document.getElementById('freeTimeActive');
+const activeTextEl = document.getElementById('freeTimeActiveText');
+const endFreeTimeBtn = document.getElementById('endFreeTimeBtn');
+const suggestionEl = document.getElementById('freeTimeSuggestion');
+const promptEl = document.getElementById('freeTimePrompt');
+const chipsEl = document.getElementById('freeTimeChips');
+const freeTimeLink = document.getElementById('freeTimeLink');
 
 function renderChips(suggestion, promptText) {
   promptEl.textContent = promptText;
@@ -117,44 +121,49 @@ function renderChips(suggestion, promptText) {
     chip.className = opt.suggested ? 'chip suggested' : 'chip';
     chip.textContent = `${opt.durationMin} min`;
     chip.addEventListener('click', async () => {
-      await chrome.runtime.sendMessage({ type: 'START_BREAK', armIndex: opt.armIndex });
+      await chrome.runtime.sendMessage({ type: 'START_FREE_TIME', armIndex: opt.armIndex });
       render();
-      renderBreak();
+      renderFreeTime();
     });
     chipsEl.appendChild(chip);
   }
   suggestionEl.style.display = 'block';
-  breakLink.style.display = 'none';
+  freeTimeLink.style.display = 'none';
 }
 
-async function renderBreak() {
-  const status = await chrome.runtime.sendMessage({ type: 'GET_BREAK_STATUS' });
+async function renderFreeTime() {
+  const status = await chrome.runtime.sendMessage({ type: 'GET_FREE_TIME_STATUS' });
 
   if (status.active) {
     activeEl.style.display = 'block';
     suggestionEl.style.display = 'none';
-    breakLink.style.display = 'none';
-    const remainingMin = Math.max(1, Math.ceil((status.breakUntil - Date.now()) / 60000));
-    activeEl.textContent = `On a break — ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining. Ending it early is only available from a site's blocked page.`;
+    freeTimeLink.style.display = 'none';
+    const remainingMin = Math.max(1, Math.ceil((status.freeTimeUntil - Date.now()) / 60000));
+    activeTextEl.textContent = `Free time — ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining. All managed sites are open.`;
     return;
   }
   activeEl.style.display = 'none';
   suggestionEl.style.display = 'none';
 
-  const suggestion = await chrome.runtime.sendMessage({ type: 'GET_BREAK_SUGGESTION' });
+  const suggestion = await chrome.runtime.sendMessage({ type: 'GET_FREE_TIME_SUGGESTION' });
   if (suggestion.suggestedArmIndex === null) {
-    breakLink.style.display = 'none'; // no break duration fits the configured cap
+    freeTimeLink.style.display = 'none'; // no duration fits the configured cap
     return;
   }
 
   if (suggestion.shouldSuggest) {
-    const usedMin = Math.round(suggestion.effortMinutesToday);
-    renderChips(suggestion, `You've spent about ${usedMin} min on managed sites today — take a break?`);
+    renderChips(suggestion, `The gate's pushed back a few times today — want some free time?`);
   } else {
-    breakLink.style.display = 'inline-block';
-    breakLink.onclick = () => renderChips(suggestion, 'Suggested break, based on what has held up before:');
+    freeTimeLink.style.display = 'inline-block';
+    freeTimeLink.onclick = () => renderChips(suggestion, 'Suggested free time, based on what has held up before:');
   }
 }
 
+endFreeTimeBtn.addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'END_FREE_TIME' });
+  render();
+  renderFreeTime();
+});
+
 render();
-renderBreak();
+renderFreeTime();
