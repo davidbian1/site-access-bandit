@@ -18,9 +18,10 @@ already follow.
 **Built and covered by automated tests:** the core LinUCB decision loop,
 per-navigation re-gating, override/extend/grace mechanics, trust decay,
 cross-site warm-start, discounting, the learning-trends view, disabled-time
-reconstruction, take-a-break with a learned duration bandit. 68 JS tests
-(`node --test`), 39 Python tests (`pytest eval/`), ESLint clean, all
-running in CI on every push.
+reconstruction, identity-subdomain exemption for sign-in flows, and free
+time (a learned-duration window that suspends gating network-wide) with a
+frictionless early-end. 75 JS tests (`node --test`), 39 Python tests
+(`pytest eval/`), ESLint clean, all running in CI on every push.
 
 **Never run in an actual browser.** Every one of the above has been
 verified by unit tests and offline simulation, never by loading the
@@ -28,7 +29,7 @@ unpacked extension in Chrome/Edge and clicking through it. This is the
 single largest gap between "the logic is correct" and "the extension
 works" — see §1.
 
-**Zero calibration against real usage.** `DEFAULT_ALPHA`, the break
+**Zero calibration against real usage.** `DEFAULT_ALPHA`, the free-time
 bandit's settings, all of it — tuned against synthetic simulated
 environments (ADRs 0001–0003), never against this extension's own logged
 sessions, because until the last session there was no way to get sessions
@@ -59,10 +60,13 @@ Developer mode → Load unpacked) and walk through, on a real managed site:
 4. Let a session run long enough to hit `longFormDwellMin`/
    `extremeLongFormMin`, confirm the silent re-draw and the "continue
    watching" offer both appear and both work.
-5. Start a take-a-break from the popup (confirm the chips appear, confirm
-   an in-progress grant actually ends), let it run to completion, confirm
-   a second one gets overridden correctly from the blocked page with the
-   steeper wait/hold.
+5. Start free time from the popup (confirm the chips appear, confirm an
+   in-progress grant actually ends, confirm every managed site is
+   genuinely reachable with zero prompts for the window). Confirm "End
+   free time now" restores gating immediately with no wait. Separately,
+   let a full window run to completion and confirm gating resumes on its
+   own right at the natural end, not delayed until the next unrelated
+   event.
 6. Disable the extension for a few minutes with a managed site open in
    another tab, re-enable it, confirm the unmonitored-gap reconstruction
    shows up in the trends table (needs the `history` permission actually
@@ -70,6 +74,10 @@ Developer mode → Load unpacked) and walk through, on a real managed site:
    added).
 7. Open the options page, exercise every settings field, the debug tables
    (both bandits), session export, and clear-history.
+8. On a managed site with a real sign-in flow through an identity
+   subdomain (e.g. YouTube → Google sign-in, which round-trips through
+   `accounts.youtube.com`), confirm sign-in completes without ever
+   hitting the blocked page mid-flow.
 
 **Size:** one focused sitting, ~45–60 minutes. This is not a "nice to have
 eventually" item — no other roadmap item here should be treated as done
@@ -212,7 +220,7 @@ needs real outside feedback, which needs real outside users, carefully.
    generous cooldowns) rather than anything aggressive.
 3. Collect feedback specifically on the two things that can't be verified
    any other way: does the bandit's behavior feel reasonable in real daily
-   use, and does the take-a-break suggestion timing feel right or
+   use, and does the free-time suggestion timing feel right or
    naggy/absent. Both are exactly the kind of thing §2's real-data
    calibration exists to eventually fix.
 4. Only after that feedback loop, consider public listing.

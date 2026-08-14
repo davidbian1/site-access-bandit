@@ -382,9 +382,10 @@ those need manual verification in an actual loaded extension.
   "why," starting with the `eval/`-backed ones (`0001`: the reward
   ceiling and alpha miscalibration; `0002`: the recency feature tested and
   rejected, cross-site warm-start tested and shipped; `0003`: a
-  break-duration bandit tested and shipped, a cross-site "fatigue" context
-  feature for the *site* bandit tested and rejected). `docs/adr/README.md`
-  has the convention for proposing any
+  break-duration bandit tested and shipped, later redesigned into "free
+  time" (see the ADR's Update section and DESIGN.md's "Free time" section),
+  plus a cross-site "fatigue" context feature for the *site* bandit tested
+  and rejected). `docs/adr/README.md` has the convention for proposing any
   future addition to `eval/`'s toolchain.
 - `notebooks/bandit_tuning.ipynb` — executes the `eval/tune.py` sweep and
   renders the regret-curve/reward-variant plots referenced in ADR 0001;
@@ -469,110 +470,113 @@ continuous stretch, capped at `RECONSTRUCTED_VISIT_GAP_CAP_MIN` (default
 sitting open the whole time. This requires the `history` permission,
 added to `manifest.json`.
 
-## Take a break
+## Free time
 
 Everything above is reactive from the bandit's side (you show up, it
 decides) or an escape hatch you reach for after being denied (override,
-extend). Take a break is the one proactive mechanism: from the popup, you
-can block every managed site at once, before you're actually tempted,
-rather than relying on willpower or a fresh bandit decision in the moment.
+extend) — both of which cost real, deliberate effort by design. Free time
+is different: a proactive, user-initiated window where gating is
+suspended entirely across every managed site, meant as a legitimate,
+tracked alternative to the two costlier ways of getting real relief —
+reaching for an override repeatedly, or fully disabling the extension
+(which corrupts active-time tracking; see `STALE_GRANT_THRESHOLD_MIN`/
+`HEARTBEAT_GAP_THRESHOLD_MIN`). This replaced an earlier design that
+*blocked* every site instead (a commitment device) — see
+`docs/adr/0003-break-duration-bandit-and-fatigue-feature.md`'s Update
+section for the full redesign rationale; a real report was that the
+commitment-device framing pushed people toward exactly the two escape
+hatches it should have made less necessary.
 
-**The duration is a learned bandit decision, not typed in.** A second,
-global `LinUCB` instance (`getBreakBandit` in `lib/background-helpers.js`,
-`BREAK_DURATIONS_MIN = [10, 20, 30, 45, 60, 90, 120]` in `lib/config.js`)
-picks the suggested duration the same way the site bandit picks a grant
-duration — see
-`docs/adr/0003-break-duration-bandit-and-fatigue-feature.md` for the
-simulation this design is based on. There is no minutes input field
-anywhere in the UI; the popup only ever offers duration *chips* (the
-bandit's suggestion plus its two nearest eligible neighbors), and starting
-a break is a single click on one of them.
+**Gating is suspended at the network level, not just refused-then-un-refused.**
+`rebuildBlockRules` skips adding a block rule for *any* managed site while
+a free-time window is active, so a fresh top-level navigation never hits
+`blocked.html` in the first place — no popup, no click, no decision to
+make. `handleRequestAccess`/`CHECK_ACCESS` still check
+`store.freeTimeUntil` as a defensive fallback (unconditionally granting,
+never denying), but that's a safety net for a race at a window's exact
+edge, not the primary mechanism.
 
-**Context comes from cross-site "fatigue," not the site bandit's own
-context.** `globalFatigueStats` (`lib/background-helpers.js`) rolls up
-total active minutes and session count across *every* managed site in the
-last 24h — deliberately not folded into the per-site bandit's own
-`buildContext` calls, since ADR 0003's simulation found that feature does
-NOT clearly help the per-site bandit, only this one, where fatigue is a
-much larger share of what actually drives the decision.
+**The duration is still a learned bandit decision, not typed in.** A
+second, global `LinUCB` instance (`getFreeTimeBandit` in
+`lib/background-helpers.js`, `FREE_TIME_DURATIONS_MIN = [10, 20, 30, 45,
+60, 90, 120]` in `lib/config.js`) picks the suggested duration the same
+way the site bandit picks a grant duration. There is no minutes input
+field anywhere in the UI; the popup only ever offers duration *chips*
+(the bandit's suggestion plus its two nearest eligible neighbors), and
+starting a window is a single click on one of them.
+
+**Context still comes from cross-site "fatigue," not the site bandit's own
+context** (`globalFatigueStats` in `lib/background-helpers.js`, rolling up
+total active minutes across every managed site in the last 24h) — ADR
+0003's simulation found this doesn't clearly help the *per-site* bandit's
+context, only this one, where it's a much larger share of what actually
+drives the decision.
 
 **Reward is inferred from what actually happened, not an added rating
-prompt** (see `computeBreakReward` in `lib/config.js`):
-- **Overridden before it ended** (`overrideBreak` in `background.js`):
-  penalized, scaled by how early — breaking at minute 2 of 60 costs more
-  than breaking at minute 55. Trained immediately, and clears the
-  follow-up alarm below.
-- **Not overridden, but you were back on a managed site (or started
-  another break) within `breakTooSoonWindowMin` of it ending**: the break
-  wasn't long enough. A `breakFollowup:<startedAt>` alarm
-  (`onBreakFollowup`), scheduled when the break starts and fired
-  `breakTooSoonWindowMin` after it's due to end, scans real session and
-  break-start timestamps in that window — if it finds one, the reward is
-  penalized, scaled by how soon the return happened.
-- **Not overridden, no such activity within the window**: a clean
+prompt** (see `computeFreeTimeReward` in `lib/config.js`) — and unlike the
+original block-based design, ending a window early is never treated as a
+bad outcome:
+- **Ended early** (`endFreeTimeNow` in `background.js`, triggered by a
+  plain, frictionless "End free time now" click in the popup — no wait,
+  no hold): scored by how much of the window was actually used before
+  ending it. Ending at 5% elapsed scores low (this duration was mostly
+  unused — pick shorter next time); ending at 95% scores close to the
+  full bonus (this was close to right-sized). Floored at 0, never
+  negative — choosing to re-enable your own gating early is a good
+  outcome no matter how soon.
+- **Ran its course, but a denial or override happened on any managed
+  site (or another free-time window started) within
+  `freeTimeTooShortWindowMin` of it ending**: the window wasn't long
+  enough. A `freeTimeFollowup:<startedAt>` alarm, scheduled when the
+  window starts and fired `freeTimeTooShortWindowMin` after it's due to
+  end, scans real session/window-start timestamps for exactly that — if
+  it finds one, the reward is penalized, scaled by how soon it happened.
+- **Ran its course, no such friction within the window**: a clean
   completion, the full bonus.
 
 This alarm-based, after-the-fact scan (rather than reacting the instant a
-new grant or break happens) is deliberate: the window itself is a fixed
-absolute time range regardless of when the alarm actually fires, so a
-late-firing alarm (extension briefly disabled, computer asleep) delays
-*when* the break gets trained, not *what* it gets trained on.
+denial happens) is deliberate: the window itself is a fixed absolute time
+range regardless of when the alarm actually fires, so a late-firing alarm
+(extension briefly disabled, computer asleep) delays *when* the window
+gets trained, not *what* it gets trained on. A second, fixed-name
+`freeTimeExpire` alarm fires right at the window's natural end specifically
+to restore gating promptly — rescheduled, not duplicated, if a new window
+starts before the previous one's natural end — so sites don't stay
+ungated for the full follow-up window after free time was supposed to be
+over.
 
-**`breakMaxMin` filters which arms are selectable without resizing the
+**`freeTimeMaxMin` filters which arms are selectable without resizing the
 bandit.** The candidate list itself never changes shape (persisted bandit
-state needs a stable arm count); `eligibleBreakArmIndices` filters it down
-to arms at or under the current cap at suggestion and selection time.
+state needs a stable arm count); `eligibleFreeTimeArmIndices` filters it
+down to arms at or under the current cap at suggestion and selection
+time. This is the only real constraint left on free time — an unbounded
+window would just be "disable the extension" with extra steps, so
+`freeTimeMaxMin` (default 180 minutes) caps a single window's length.
+This isn't a punishment mechanism, and — unlike the original design —
+there's no separate friction mechanism guarding it either; the cap alone
+is what keeps it bounded.
 
-**Surfacing is occasional, not a permanent form.** `GET_BREAK_SUGGESTION`
-returns `shouldSuggest: true` once today's cross-site total crosses
-`breakEffortThresholdMin`, throttled by `breakSuggestCooldownMin` so it
-doesn't nag on every popup open while the total stays elevated — the popup
-shows the duration chips automatically in that case. Otherwise, a small
-"Take a break" link reveals the same chips on demand, so taking a break is
-never blocked on the effort threshold actually being crossed.
+**Surfacing is occasional, and the trigger is friction, not time spent.**
+`GET_FREE_TIME_SUGGESTION` returns `shouldSuggest: true` once
+`globalFrictionCount24h` (denials and overrides across every managed site
+today) crosses `freeTimeFrictionThreshold` (default 3), throttled by
+`freeTimeSuggestCooldownMin` so it doesn't nag on every popup open while
+friction stays elevated — the popup shows the duration chips automatically
+in that case. Otherwise, a small "Free time" link reveals the same chips
+on demand, so starting one is never gated on the threshold actually being
+crossed. Friction (not total time spent) is the trigger deliberately: it's
+the more direct signal for the motivating problem — how often gating has
+actually pushed back today — where total time is a better predictor of
+how *long* a window should be than of *whether* to offer one right now.
 
-**Not (yet) validated against real usage.** ADR 0003's simulation found
-the reward shape learnable and non-degenerate in a synthetic environment;
-`DEFAULT_BREAK_ALPHA = 0.15` is a deliberately conservative pick from a
-0.08–0.3 range that all performed similarly well there, same "don't ship a
-synthetic optimum as a real default" reasoning as `DEFAULT_ALPHA` in ADR
-0001. It has not been tuned against real break-taking data, because there
-isn't any yet.
-
-**Committing to a break is still not a bandit decision, even though its
-length now is.** `handleRequestAccess` and `CHECK_ACCESS` both check
-`store.breakUntil` before anything else — before grants, cooldowns, or
-grace credits — so an active break supersedes all of them uniformly
-rather than needing special-cased exceptions at each site's own state.
-Starting one immediately ends any grant already in progress
-(`finalizeSession(hostname, 'break-started')`, which still trains the
-*site* bandit normally — the time actually spent before the break started
-is real usage data) and kicks out any already-open tab on a managed site,
-including ones a lingering grace credit would otherwise have let through.
-
-Two more constraints keep it from working against you or from being
-pointless:
-
-- **A hard cap on how long a single break can be**, `breakMaxMin` (default
-  180 minutes). Since the duration now comes from the bandit rather than a
-  typed number, this is enforced by `eligibleBreakArmIndices` filtering
-  which candidate arms can be suggested or selected at all, rather than by
-  clamping a raw input. This isn't a punishment mechanism — an unbounded
-  break could lock out a site you end up genuinely needing, with no bandit
-  decision or override delay standing between you and that being a real
-  problem, only the passage of time.
-- **A deliberately steeper override than any other in the extension.**
-  Ending a break early still goes through the same wait-then-hold shape as
-  every other override (see blocked.js), but with its own settings
-  (`breakOverrideDelaySec` default 45s, `breakOverrideHoldMs` default 8s)
-  that are flat and — unlike the ordinary per-site override — never
-  discounted by banked trust (`applyTrustDiscount` is not applied here).
-  The whole point of asking for a break is to bind your future self; an
-  override that's just as easy to reach as any ordinary denial would
-  undermine that the first time it's actually tested. It's intentionally
-  only reachable from a site's blocked page, not from the popup itself —
-  the popup can start a break, but backing out requires actually hitting
-  the wall a break is meant to put up.
+**Not (yet) validated against real usage, and not independently
+re-simulated from the original design.** ADR 0003's original simulation
+found the reward shape's general asymmetric-penalty structure learnable
+and non-degenerate; `DEFAULT_FREE_TIME_ALPHA = 0.15` is inherited as-is
+from that finding, not re-derived for the free-time reward shape
+specifically. `eval/simulate_break.py` still describes the old block-based
+design and hasn't been updated — see the ADR's Update section for why
+that's a tracked gap, not an oversight.
 
 ## Security model
 
