@@ -145,38 +145,29 @@
     <label for="cooldownRampSecPerMin">Cooldown ramp (extra seconds per minute of recent avg active time)</label>
     <input type="number" id="cooldownRampSecPerMin" step="0.5" min="0" />
 
-    <label for="breakMaxMin">Take-a-break cap (minutes) — longest break you can start at once</label>
-    <input type="number" id="breakMaxMin" step="5" min="1" />
+    <label for="freeTimeMaxMin">Free-time cap (minutes) — longest ungated window you can start at once</label>
+    <input type="number" id="freeTimeMaxMin" step="5" min="1" />
 
-    <label for="breakOverrideDelaySec">Break override wait (seconds) — flat, not discounted by trust</label>
-    <input type="number" id="breakOverrideDelaySec" step="5" min="0" />
+    <label for="freeTimeAlpha">Free-time-duration bandit exploration coefficient (alpha) — tuned separately from the site bandit's; see ADR 0003's Update section</label>
+    <input type="number" id="freeTimeAlpha" step="0.05" min="0" />
 
-    <label for="breakOverrideHoldMs">Break override hold duration (milliseconds)</label>
-    <input type="number" id="breakOverrideHoldMs" step="500" min="0" />
+    <label for="freeTimeDiscountFactor">Free-time-duration bandit discount factor (gamma)</label>
+    <input type="number" id="freeTimeDiscountFactor" step="0.001" min="0" max="1" />
 
-    <label for="breakAlpha">Break-duration bandit exploration coefficient (alpha) — tuned separately from the site bandit's; see ADR 0003</label>
-    <input type="number" id="breakAlpha" step="0.05" min="0" />
+    <label for="freeTimeCompleteBonus">Free-time completion bonus — reward for a window that ran its course without being ended early or followed by returning friction</label>
+    <input type="number" id="freeTimeCompleteBonus" step="0.05" min="0" />
 
-    <label for="breakDiscountFactor">Break-duration bandit discount factor (gamma)</label>
-    <input type="number" id="breakDiscountFactor" step="0.001" min="0" max="1" />
+    <label for="freeTimeTooShortPenalty">Free-time too-short penalty — scaled by how soon a denial or override happened after the window ended</label>
+    <input type="number" id="freeTimeTooShortPenalty" step="0.05" min="0" />
 
-    <label for="breakCompleteBonus">Break completion bonus — reward for a break that ran its course without being overridden or followed by an early return</label>
-    <input type="number" id="breakCompleteBonus" step="0.05" min="0" />
+    <label for="freeTimeTooShortWindowMin">Free-time "too short" window (minutes) — how long after a window ends a fresh denial/override still counts against it</label>
+    <input type="number" id="freeTimeTooShortWindowMin" step="1" min="0" />
 
-    <label for="breakTooShortPenalty">Break too-short penalty — scaled by how soon you were back on a managed site after the break ended</label>
-    <input type="number" id="breakTooShortPenalty" step="0.05" min="0" />
+    <label for="freeTimeFrictionThreshold">Free-time suggestion threshold — denials/overrides across all sites today before free time is proactively suggested</label>
+    <input type="number" id="freeTimeFrictionThreshold" step="1" min="0" />
 
-    <label for="breakOverridePenalty">Break override penalty (bandit reward) — scaled by how early the override happened, separate from the friction settings above</label>
-    <input type="number" id="breakOverridePenalty" step="0.05" min="0" />
-
-    <label for="breakTooSoonWindowMin">Break "too soon" window (minutes) — how long after a break ends a return to a managed site still counts against it</label>
-    <input type="number" id="breakTooSoonWindowMin" step="1" min="0" />
-
-    <label for="breakEffortThresholdMin">Break suggestion threshold (minutes) — total time across managed sites today before a break is proactively suggested</label>
-    <input type="number" id="breakEffortThresholdMin" step="5" min="0" />
-
-    <label for="breakSuggestCooldownMin">Break suggestion cooldown (minutes) — minimum time between proactive suggestions</label>
-    <input type="number" id="breakSuggestCooldownMin" step="5" min="0" />
+    <label for="freeTimeSuggestCooldownMin">Free-time suggestion cooldown (minutes) — minimum time between proactive suggestions</label>
+    <input type="number" id="freeTimeSuggestCooldownMin" step="5" min="0" />
 
     <div>
       <button class="primary" id="saveSettingsBtn">Save settings</button>
@@ -203,13 +194,13 @@
   </section>
 
   <section>
-    <h2>Break-duration bandit (debug)</h2>
+    <h2>Free-time-duration bandit (debug)</h2>
     <div class="add-row">
-      <button id="breakDebugBtn">Show current arm scores</button>
-      <button class="danger" id="breakResetBtn">Reset break-duration model</button>
+      <button id="freeTimeDebugBtn">Show current arm scores</button>
+      <button class="danger" id="freeTimeResetBtn">Reset free-time-duration model</button>
     </div>
-    <p class="muted" id="breakEffortDisplay"></p>
-    <table id="breakDebugTable">
+    <p class="muted" id="freeTimeEffortDisplay"></p>
+    <table id="freeTimeDebugTable">
       <thead><tr><th>Arm (min)</th><th>Eligible</th><th>Mean estimate</th><th>Uncertainty</th><th>UCB score</th></tr></thead>
       <tbody></tbody>
     </table>

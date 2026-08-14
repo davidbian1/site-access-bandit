@@ -75,17 +75,14 @@ async function loadSettings() {
   document.getElementById('minCooldownSec').value = settings.minCooldownSec;
   document.getElementById('maxCooldownSec').value = settings.maxCooldownSec;
   document.getElementById('cooldownRampSecPerMin').value = settings.cooldownRampSecPerMin;
-  document.getElementById('breakMaxMin').value = settings.breakMaxMin;
-  document.getElementById('breakOverrideDelaySec').value = settings.breakOverrideDelaySec;
-  document.getElementById('breakOverrideHoldMs').value = settings.breakOverrideHoldMs;
-  document.getElementById('breakAlpha').value = settings.breakAlpha;
-  document.getElementById('breakDiscountFactor').value = settings.breakDiscountFactor;
-  document.getElementById('breakCompleteBonus').value = settings.breakCompleteBonus;
-  document.getElementById('breakTooShortPenalty').value = settings.breakTooShortPenalty;
-  document.getElementById('breakOverridePenalty').value = settings.breakOverridePenalty;
-  document.getElementById('breakTooSoonWindowMin').value = settings.breakTooSoonWindowMin;
-  document.getElementById('breakEffortThresholdMin').value = settings.breakEffortThresholdMin;
-  document.getElementById('breakSuggestCooldownMin').value = settings.breakSuggestCooldownMin;
+  document.getElementById('freeTimeMaxMin').value = settings.freeTimeMaxMin;
+  document.getElementById('freeTimeAlpha').value = settings.freeTimeAlpha;
+  document.getElementById('freeTimeDiscountFactor').value = settings.freeTimeDiscountFactor;
+  document.getElementById('freeTimeCompleteBonus').value = settings.freeTimeCompleteBonus;
+  document.getElementById('freeTimeTooShortPenalty').value = settings.freeTimeTooShortPenalty;
+  document.getElementById('freeTimeTooShortWindowMin').value = settings.freeTimeTooShortWindowMin;
+  document.getElementById('freeTimeFrictionThreshold').value = settings.freeTimeFrictionThreshold;
+  document.getElementById('freeTimeSuggestCooldownMin').value = settings.freeTimeSuggestCooldownMin;
 }
 
 document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
@@ -127,17 +124,14 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
     minCooldownSec: parseFloat(document.getElementById('minCooldownSec').value),
     maxCooldownSec: parseFloat(document.getElementById('maxCooldownSec').value),
     cooldownRampSecPerMin: parseFloat(document.getElementById('cooldownRampSecPerMin').value),
-    breakMaxMin: parseFloat(document.getElementById('breakMaxMin').value),
-    breakOverrideDelaySec: parseFloat(document.getElementById('breakOverrideDelaySec').value),
-    breakOverrideHoldMs: parseFloat(document.getElementById('breakOverrideHoldMs').value),
-    breakAlpha: parseFloat(document.getElementById('breakAlpha').value),
-    breakDiscountFactor: parseFloat(document.getElementById('breakDiscountFactor').value),
-    breakCompleteBonus: parseFloat(document.getElementById('breakCompleteBonus').value),
-    breakTooShortPenalty: parseFloat(document.getElementById('breakTooShortPenalty').value),
-    breakOverridePenalty: parseFloat(document.getElementById('breakOverridePenalty').value),
-    breakTooSoonWindowMin: parseFloat(document.getElementById('breakTooSoonWindowMin').value),
-    breakEffortThresholdMin: parseFloat(document.getElementById('breakEffortThresholdMin').value),
-    breakSuggestCooldownMin: parseFloat(document.getElementById('breakSuggestCooldownMin').value),
+    freeTimeMaxMin: parseFloat(document.getElementById('freeTimeMaxMin').value),
+    freeTimeAlpha: parseFloat(document.getElementById('freeTimeAlpha').value),
+    freeTimeDiscountFactor: parseFloat(document.getElementById('freeTimeDiscountFactor').value),
+    freeTimeCompleteBonus: parseFloat(document.getElementById('freeTimeCompleteBonus').value),
+    freeTimeTooShortPenalty: parseFloat(document.getElementById('freeTimeTooShortPenalty').value),
+    freeTimeTooShortWindowMin: parseFloat(document.getElementById('freeTimeTooShortWindowMin').value),
+    freeTimeFrictionThreshold: parseFloat(document.getElementById('freeTimeFrictionThreshold').value),
+    freeTimeSuggestCooldownMin: parseFloat(document.getElementById('freeTimeSuggestCooldownMin').value),
   };
   await chrome.runtime.sendMessage({ type: 'SET_SETTINGS', settings });
   const status = document.getElementById('saveStatus');
@@ -173,10 +167,11 @@ document.getElementById('resetAllBtn').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'RESET_BANDIT' });
 });
 
-document.getElementById('breakDebugBtn').addEventListener('click', async () => {
-  const { scores, effortMinutesToday } = await chrome.runtime.sendMessage({ type: 'GET_BREAK_BANDIT_DEBUG' });
-  document.getElementById('breakEffortDisplay').textContent = `Cross-site active time in the last 24h: ${effortMinutesToday.toFixed(1)} min`;
-  const tbody = document.querySelector('#breakDebugTable tbody');
+document.getElementById('freeTimeDebugBtn').addEventListener('click', async () => {
+  const { scores, effortMinutesToday, frictionToday } = await chrome.runtime.sendMessage({ type: 'GET_FREE_TIME_BANDIT_DEBUG' });
+  document.getElementById('freeTimeEffortDisplay').textContent =
+    `Cross-site active time in the last 24h: ${effortMinutesToday.toFixed(1)} min — friction (denials/overrides) today: ${frictionToday}`;
+  const tbody = document.querySelector('#freeTimeDebugTable tbody');
   tbody.innerHTML = '';
   for (const s of scores) {
     const tr = document.createElement('tr');
@@ -189,13 +184,13 @@ document.getElementById('breakDebugBtn').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('breakResetBtn').addEventListener('click', async () => {
-  await chrome.runtime.sendMessage({ type: 'RESET_BREAK_BANDIT' });
+document.getElementById('freeTimeResetBtn').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'RESET_FREE_TIME_BANDIT' });
 });
 
 // The concrete unlock for ADR 0001/0003's "validate against real usage
-// data" next step: eval/tune.py and a future break-bandit equivalent both
-// need real logged sessions, not synthetic ones, and this is the only way
+// data" next step: eval/tune.py and a future free-time-bandit equivalent
+// both need real logged sessions, not synthetic ones, and this is the only way
 // to get them out of chrome.storage.local. No "downloads" permission
 // needed — a plain same-page anchor click triggers a normal browser
 // download, same as any regular web page offering a file save.
