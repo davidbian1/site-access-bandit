@@ -19,6 +19,9 @@ import {
   BREAK_DURATIONS_MIN,
   eligibleBreakArmIndices,
   computeBreakReward,
+  AUTH_SUBDOMAIN_PREFIXES,
+  authSubdomainHostnames,
+  isAuthSubdomain,
 } from './lib/config.js';
 import {
   escapeRegex,
@@ -99,6 +102,26 @@ async function rebuildBlockRules() {
     const assign = await ruleIdFor(site.hostname, ruleIds, nextId);
     nextId = assign.nextRuleId;
     const escaped = escapeRegex(site.hostname);
+
+    // A higher-priority `allow` rule for known identity-subdomain hops
+    // (accounts.<site>, login.<site>, ...) — evaluated before the redirect
+    // rule below, so signing in never gets diverted to blocked.html mid-
+    // handshake. DNR's regexFilter runs on RE2, which has no negative
+    // lookahead, so this has to be a separate, explicitly-allowed rule
+    // rather than an exclusion baked into the redirect rule's own pattern.
+    // See isAuthSubdomain's comment in lib/config.js for why.
+    const authAssign = await ruleIdFor(`auth:${site.hostname}`, ruleIds, nextId);
+    nextId = authAssign.nextRuleId;
+    addRules.push({
+      id: authAssign.id,
+      priority: 2,
+      condition: {
+        regexFilter: `^https?://(${AUTH_SUBDOMAIN_PREFIXES.join('|')})\\.${escaped}(:[0-9]+)?(/.*)?$`,
+        resourceTypes: ['main_frame'],
+      },
+      action: { type: 'allow' },
+    });
+
     addRules.push({
       id: assign.id,
       priority: 1,
@@ -144,6 +167,11 @@ async function rebuildContentScripts() {
   const scripts = [];
   for (const site of sites) {
     const matches = [`*://*.${site.hostname}/*`, `*://${site.hostname}/*`];
+    // Identity-subdomain hops (accounts.<site> etc.) are excluded the same
+    // way the DNR allow rule exempts them — enforcement here never even
+    // starts on a sign-in redirect, rather than starting and then having
+    // to recognize it should back off. See isAuthSubdomain in lib/config.js.
+    const excludeMatches = authSubdomainHostnames(site.hostname).map((h) => `*://${h}/*`);
     // MAIN world: patches the page's real history.pushState/replaceState so
     // client-side routing (e.g. video-to-video, short-form swipe feeds) is
     // actually observed — an isolated-world override never sees calls made
@@ -151,6 +179,7 @@ async function rebuildContentScripts() {
     scripts.push({
       id: `${CONTENT_SCRIPT_ID_PREFIX}main-${site.hostname}`,
       matches,
+      excludeMatches,
       js: ['content-main.js'],
       runAt: 'document_start',
       world: 'MAIN',
@@ -159,6 +188,7 @@ async function rebuildContentScripts() {
     scripts.push({
       id: `${CONTENT_SCRIPT_ID_PREFIX}${site.hostname}`,
       matches,
+      excludeMatches,
       js: ['content.js'],
       runAt: 'document_start',
     });
@@ -178,6 +208,10 @@ async function injectIntoOpenTabs(hostname) {
   }
   for (const tab of tabs) {
     if (!tab.id) continue;
+    // Same identity-subdomain exemption as rebuildContentScripts — a tab
+    // already sitting on a sign-in hop shouldn't get enforcement injected
+    // into it either.
+    if (isAuthSubdomain(hostnameFromUrl(tab.url || '') || '', hostname)) continue;
     try {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-main.js'], world: 'MAIN' });
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
@@ -314,6 +348,9 @@ async function kickOutTabs(hostname) {
   }
   for (const tab of tabs) {
     if (!tab.id || !tab.url) continue;
+    // A tab mid-sign-in shouldn't be kicked to blocked.html just because a
+    // grant on the main site ended — see isAuthSubdomain in lib/config.js.
+    if (isAuthSubdomain(hostnameFromUrl(tab.url) || '', hostname)) continue;
     const blockedUrl = chrome.runtime.getURL(
       `blocked.html?site=${encodeURIComponent(hostname)}&target=${encodeURIComponent(tab.url)}`
     );

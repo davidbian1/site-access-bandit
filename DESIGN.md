@@ -627,6 +627,38 @@ in `chrome.storage.local`). The categories that do apply:
   the reward function. See `ROADMAP.md` for this as a tracked, verify-then-fix
   item rather than something to change blind.
 
+## Identity-subdomain exemption
+
+Subdomains of a managed site are gated the same as the site itself by
+default (`m.youtube.com`, `music.youtube.com`, etc. are all covered by one
+rule) — necessary for the block to actually cover the site, but it swept up
+something that isn't really "the site" at all: signing into a managed
+site's account commonly bounces the top-level frame through a dedicated
+identity subdomain — Google's own sign-in flow from YouTube round-trips
+through `accounts.youtube.com`, a real subdomain that exists purely to sync
+the account session, not to serve content. Gating that hop interrupted
+sign-in itself: the redirect got diverted to `blocked.html` mid-handshake,
+found from a real report of the extension's blocked page appearing while
+signing into a Google account with only YouTube managed.
+
+`AUTH_SUBDOMAIN_PREFIXES` in `lib/config.js` (`accounts`, `login`,
+`signin`, `auth`, `sso`, `id`) is exempted at every enforcement layer:
+
+- A higher-priority `allow` rule in `rebuildBlockRules` (DNR's
+  `regexFilter` runs on RE2, which has no negative lookahead, so this has
+  to be a second, explicitly-allowed rule rather than an exclusion baked
+  into the redirect rule's own pattern).
+- `excludeMatches` on both content script registrations in
+  `rebuildContentScripts`, so per-navigation enforcement never starts on a
+  sign-in hop in the first place.
+- `injectIntoOpenTabs` and `kickOutTabs` both skip tabs already sitting on
+  one of these subdomains, for the same reason.
+
+This is a heuristic, not an exhaustive list — a false negative here (some
+site's actual content living under one of these prefixes) just means that
+one subdomain goes ungated, a much smaller cost than routinely breaking
+authentication for every managed site.
+
 ## Known limitations (MVP scope)
 
 - Blocking only covers top-level (`main_frame`) navigations, not iframes.
