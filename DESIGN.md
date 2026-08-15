@@ -243,29 +243,60 @@ as covered for as long as some grant exists anywhere on that site: a
 fresh tab to a different video while one grant is active would sail
 through untouched, since DNR isn't even blocking that hostname at all
 while a grant exists. `isSameSubUrl` (`lib/config.js`) closes this —
-`CHECK_ACCESS` (both the per-navigation, hop-consuming call and the
-non-consuming initial-page-load peek) requires the current URL's origin,
-pathname, and query string to match the grant's own `targetUrl`; only the
-hash fragment is ignored (scroll anchors, in-page state — never a
-distinct piece of content). The query string is deliberately *not*
-ignored in general, matching the same reasoning behind content.js's
-navigation debounce: some sites encode content identity there (`?v=
-VIDEO_ID` on a shared `/watch` path), so stripping it would make every
-video on a site with that pattern read as "the same page."
+`CHECK_ACCESS` requires the current URL's origin, pathname, and query
+string to match the grant's own `targetUrl`; only the hash fragment is
+ignored (scroll anchors, in-page state — never a distinct piece of
+content). The query string is deliberately *not* ignored in general,
+matching the same reasoning behind content.js's navigation debounce: some
+sites encode content identity there (`?v=VIDEO_ID` on a shared `/watch`
+path), so stripping it would make every video on a site with that
+pattern read as "the same page."
 
-This asymmetry is intentional, not incidental: staying on the exact
-granted sub-URL is treated as leniently as possible (see the section
-below); navigating to *any* different one — even within the same
-hostname, even via a fresh tab rather than an in-page navigation — is
-treated as a genuinely new decision by default. Interrupting mid-page is
-more likely to cut off real engagement; interrupting right after a
-redirect is more likely to catch exactly the kind of one-thing-leads-to-
-another drift the whole gate exists for. Grace credits (below) are the
-one deliberate, earned exception to the second half of that — a plain
-same-sub-URL grant and a grace credit are independent ways to pass, so
-`CHECK_ACCESS` checks the grant first and only touches (and only ever
-spends) banked grace when the grant alone doesn't already cover the
-request.
+**A fresh grant's first real navigation gets one free hop before that
+lock-in applies** (not to be confused with the *grace* credit's hops,
+below — a different mechanism entirely). `targetUrl` is whatever page you
+were actually blocked on when you requested access, which is often a
+general entry point (a homepage, a search/listing page) rather than the
+specific content you meant to reach — clicking from there into an actual
+video is a different sub-URL by `isSameSubUrl`'s own definition. Without
+an exception, that first click — the very next thing you'd naturally do
+right after being granted access — would immediately fail the check
+above and get re-gated, which defeats the point of granting access at
+all. `makeGrant`'s `hopUsed` flag (`lib/background-helpers.js`) starts
+`false`; the first consuming `CHECK_ACCESS` call that doesn't match
+`targetUrl` is let through anyway, `hopUsed` flips to `true`, and
+`targetUrl` updates to wherever that navigation landed — from then on,
+*that's* the one sub-URL this grant covers, enforced exactly as strictly
+as before. Only the consuming (real-navigation) path can spend this hop;
+the non-consuming initial-page-load peek never does, so a fresh tab or
+page load to a different sub-URL still needs its own decision regardless
+of whether the hop's been spent — that's the original fresh-tab gap
+above, which this doesn't reopen.
+
+Known imprecision, stated plainly rather than glossed over: if a grant is
+requested directly on already-specific content (a direct link to one
+video, not a general entry point), the first-hop allowance still exists
+and would let exactly one *further* navigation through before locking —
+slightly more than "one sub-URL" in that specific case. Distinguishing
+"was the original target a general entry point or already-specific
+content" would need fragile, site-specific heuristics this project
+deliberately avoids elsewhere (see the identity-subdomain section's own
+disclaimer); erring toward occasionally-too-lenient was the deliberate
+choice over reintroducing the original bug this exists to fix.
+
+This overall asymmetry is intentional, not incidental: staying on the
+one covered sub-URL is treated as leniently as possible (see the section
+below); navigating to any *other* one — even within the same hostname,
+even via a fresh tab rather than an in-page navigation, and after the
+one free hop is spent — is treated as a genuinely new decision by
+default. Interrupting mid-page is more likely to cut off real
+engagement; interrupting right after a redirect is more likely to catch
+exactly the kind of one-thing-leads-to-another drift the whole gate
+exists for. Grace credits (below) are the one deliberate, *earned*
+exception to the second half of that — a plain same-sub-URL grant and a
+grace credit are independent ways to pass, so `CHECK_ACCESS` checks the
+grant (including the possible free-hop spend) first and only touches
+banked grace when neither already covers the request.
 
 ## Override wait — grows with abuse, shrinks with demonstrated patience
 
