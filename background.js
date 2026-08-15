@@ -22,6 +22,7 @@ import {
   AUTH_SUBDOMAIN_PREFIXES,
   authSubdomainHostnames,
   isAuthSubdomain,
+  isSameSubUrl,
 } from './lib/config.js';
 import {
   escapeRegex,
@@ -29,7 +30,6 @@ import {
   makeGrant,
   recentStatsFor,
   isGrantStale,
-  isLongFormEngaged,
   getBanditFor,
   estimateExposureMinutes,
   globalFatigueStats,
@@ -204,9 +204,32 @@ async function rebuildContentScripts() {
   await chrome.scripting.registerContentScripts(scripts);
 }
 
+// Whether content.js is already alive in a tab — chrome.tabs.sendMessage
+// rejects when nothing on the other end is listening. Used to make
+// injection idempotent (safe to call redundantly) rather than trying to
+// infer *why* a tab might be missing it — there's no reliable signal that
+// distinguishes "this tab predates the site being added," "the extension
+// was just re-enabled," or any other reason from each other; checking
+// reality directly sidesteps needing to.
+async function hasLiveContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function injectContentScripts(tabId) {
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['content-main.js'], world: 'MAIN' });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+}
+
 // Registering a content script only affects future navigations/frames, not
 // tabs already sitting on the site — inject into those immediately so a
-// freshly-managed site is enforced without requiring a manual reload.
+// freshly-managed site (or one whose tabs lost enforcement for any other
+// reason — see reconcileOpenTabs) is covered without requiring a manual
+// reload.
 async function injectIntoOpenTabs(hostname) {
   let tabs;
   try {
@@ -221,12 +244,29 @@ async function injectIntoOpenTabs(hostname) {
     // into it either.
     if (isAuthSubdomain(hostnameFromUrl(tab.url || '') || '', hostname)) continue;
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-main.js'], world: 'MAIN' });
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      if (await hasLiveContentScript(tab.id)) continue;
+      await injectContentScripts(tab.id);
     } catch {
       // tab may not be script-injectable (e.g. a chrome:// page) — skip
     }
   }
+}
+
+// A tab that was already open and rendered when the extension got disabled
+// has no way to notice it's been re-enabled on its own — content script
+// *registration* only affects future navigations, and a tab that was
+// sitting on a managed site the whole time might never navigate again
+// (the user could just keep watching in the same tab indefinitely). There
+// is no reliable "I was just re-enabled" signal available to a service
+// worker (a cold start looks the same whether caused by re-enabling, the
+// computer waking up, or ordinary MV3 idle unloading) — so instead of
+// trying to detect the cause, this reconciles every managed site's open
+// tabs against reality on every service worker start. hasLiveContentScript
+// makes that safe to run unconditionally: a tab that was never actually
+// disconnected just answers the PING and gets left alone.
+async function reconcileOpenTabs() {
+  const { sites } = await getStore();
+  for (const site of sites) await injectIntoOpenTabs(site.hostname);
 }
 
 // ---- alarms -------------------------------------------------------------
@@ -370,7 +410,7 @@ async function kickOutTabs(hostname) {
   }
 }
 
-async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}) {
+async function finalizeSession(hostname, endReason) {
   const store = await getStore();
   const grant = store.grants[hostname];
   if (!grant) return;
@@ -433,80 +473,42 @@ async function finalizeSession(hostname, endReason, { skipKickOut = false } = {}
   });
   await chrome.alarms.clear(`expire:${hostname}`);
   await rebuildBlockRules();
-  if (!skipKickOut) await kickOutTabs(hostname);
+  await kickOutTabs(hostname);
   await maybeStopTickAlarm();
 }
 
-// Fires when a grant's timer runs out. Cutting off a 40-minute documentary
-// the instant the clock hits zero is a worse interruption than the timer
-// itself was ever meant to prevent — if you're still actively watching and
-// you've already been engaged long enough to look like genuine long-form
-// viewing (not compulsive scrolling), silently ask the bandit again instead
-// of hard-kicking you out. It still gets a real say: heavier recent usage by
-// then may well tip a fresh decision toward denying, and that's fine — it's
-// just not an unconditional cutoff at the fixed mark.
+// Fires when a grant's timer runs out. A grant covers exactly the one
+// sub-URL it was made for (see isSameSubUrl in lib/config.js) — cutting
+// that off the instant the clock hits zero is a worse interruption than
+// the timer was ever meant to prevent, so as long as the active tab is
+// still showing that exact page, this silently extends the grant rather
+// than asking the bandit again (which could still deny) or hard-cutting.
+// No cap on how many times this can renew: the moment the tab moves to
+// anything else — a different video, a different tab, loses focus
+// entirely — CHECK_ACCESS's own sub-URL check re-gates it immediately and
+// normally, which is deliberately the strict default here (see DESIGN.md's
+// "Grant scope" section for the full reasoning).
 async function handleExpiry(hostname) {
   const store = await getStore();
   const grant = store.grants[hostname];
   if (!grant) return;
 
-  const longFormEngaged = isLongFormEngaged(grant.activeSeconds, grant.durationMin, store.settings.longFormDwellMin);
   let activeTab;
   try {
     [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   } catch {
     activeTab = null;
   }
-  const stillWatching = longFormEngaged && activeTab && hostnameFromUrl(activeTab.url || '') === hostname;
+  const stillOnGrantedPage = !!activeTab && isSameSubUrl(activeTab.url || '', grant.targetUrl);
 
-  if (!stillWatching) {
+  if (!stillOnGrantedPage) {
     await finalizeSession(hostname, 'expired');
     return;
   }
 
-  await finalizeSession(hostname, 'renewed', { skipKickOut: true });
-
-  const fresh = await getStore();
-  const now = Date.now();
-  const recent = recentStatsFor(
-    fresh.sessions,
-    hostname,
-    now,
-    fresh.settings.frequencyWindowMin,
-    fresh.settings.overrideWindowMin
-  );
-  const context = buildContext(new Date(now), recent);
-  const bandit = getBanditFor(fresh, hostname);
-  const { armIndex } = bandit.selectArm(context);
-  const durationMin = fresh.settings.armDurationsMin[armIndex];
-
-  if (durationMin === 0) {
-    // The redraw denied — this is where sustained viewing finally does end.
-    bandit.update(armIndex, context, fresh.settings.denyReward);
-    fresh.banditState[hostname] = bandit.toJSON();
-    fresh.sessions.push({
-      hostname,
-      armIndex,
-      durationMin: 0,
-      grantedAt: now,
-      endedAt: now,
-      activeMinutes: 0,
-      reward: fresh.settings.denyReward,
-      decision: 'deny',
-      endReason: 'denied-on-renewal',
-      context,
-      targetUrl: activeTab.url,
-    });
-    if (fresh.sessions.length > MAX_SESSIONS_LOGGED) fresh.sessions = fresh.sessions.slice(-MAX_SESSIONS_LOGGED);
-    await setStore({ banditState: fresh.banditState, sessions: fresh.sessions });
-    await rebuildBlockRules();
-    await kickOutTabs(hostname);
-    return;
-  }
-
-  fresh.grants[hostname] = makeGrant(armIndex, durationMin, context, now, activeTab.url);
-  await setStore({ grants: fresh.grants });
-  await scheduleGrantEnforcement(hostname, fresh.grants[hostname]);
+  grant.expiresAt = Date.now() + minutesToMs(grant.durationMin);
+  await setStore({ grants: store.grants });
+  chrome.alarms.create(`expire:${hostname}`, { when: grant.expiresAt });
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -941,10 +943,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // indefinitely - checking staleness here, not just existence,
           // closes that gap directly instead of relying on some other event
           // to eventually notice.
+          //
+          // isSameSubUrl matters here for a different reason than staleness:
+          // the DNR block rule and registered content scripts are hostname-
+          // wide (they have to be — that's the only granularity DNR/matches
+          // patterns support), so without this check, ANY page on a
+          // hostname would read as granted for as long as a grant exists
+          // *anywhere* on that site — a fresh tab to a different video
+          // while one grant is active would sail through untouched. A
+          // grant only ever covers the one page it was actually made for.
           const grant = store.grants[msg.hostname];
-          const hasGrant = !!grant && !isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN);
+          const hasGrant = !!grant && !isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN) && isSameSubUrl(msg.url, grant.targetUrl);
           let inGrace;
-          if (msg.consume) {
+          if (hasGrant) {
+            // The grant alone already covers this navigation (same sub-URL) —
+            // don't also touch banked grace. Checking/consuming it here would
+            // shrink a credit for a navigation that never needed it, since
+            // grace and a plain same-page grant are two independent ways to
+            // pass, not something that stacks.
+            inGrace = false;
+          } else if (msg.consume) {
             // A navigation is actually about to spend the credit — decrement
             // it (see consumeGrace) rather than just checking it, so a grace
             // window can't be stretched across more hops than it was earned for.
@@ -1126,6 +1144,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await rebuildBlockRules();
   await rebuildContentScripts();
   await ensureHeartbeatAlarm();
+  await reconcileOpenTabs();
 });
 
 // Re-enabling a disabled extension (or a browser restart) doesn't fire
@@ -1133,14 +1152,18 @@ chrome.runtime.onInstalled.addListener(async () => {
 // that's exactly what "starting the service worker back up" means. That
 // makes this the earliest possible hook for noticing a gap, rather than
 // waiting for the next scheduled heartbeat alarm to happen to fire (which
-// could lag the actual re-enable by up to HEARTBEAT_PERIOD_MIN). Wrapped so
-// a missing permission or a cold-start race with storage doesn't crash the
-// service worker on every wake.
+// could lag the actual re-enable by up to HEARTBEAT_PERIOD_MIN), and for
+// reconciling open tabs against reality (see reconcileOpenTabs) rather
+// than leaving tabs that were already open unenforced until they happen
+// to navigate on their own. Wrapped so a missing permission or a
+// cold-start race with storage doesn't crash the service worker on every
+// wake.
 (async () => {
   try {
     await onHeartbeat();
     await ensureHeartbeatAlarm();
+    await reconcileOpenTabs();
   } catch (err) {
-    console.error('[background] startup gap check failed:', err);
+    console.error('[background] startup reconciliation failed:', err);
   }
 })();

@@ -23,6 +23,14 @@
     return location.hostname.replace(/^www\./, '');
   }
 
+  // Lets background.js check "is enforcement already running in this tab"
+  // (chrome.tabs.sendMessage rejects if nothing answers) before deciding
+  // whether to (re-)inject — see reconcileOpenTabs in background.js for why
+  // that matters after the extension is disabled and re-enabled.
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'PING') sendResponse({ alive: true });
+  });
+
   function goToBlockedPage(targetUrl) {
     if (redirecting) return;
     redirecting = true;
@@ -60,8 +68,9 @@
     if (redirecting || !url || url === lastUrl) return;
     lastUrl = url;
     try {
-      const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname(), consume: true });
+      const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname(), url, consume: true });
       if (status && status.grace) return; // spent a hop of banked grace — let it through
+      if (status && status.granted) return; // still the same sub-URL the grant actually covers
     } catch {
       // extension context invalidated — fall through to re-gating below
     }
@@ -79,7 +88,7 @@
   // covering this exact page. Non-consuming — just a peek, not a hop spend.
   (async () => {
     try {
-      const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname() });
+      const status = await chrome.runtime.sendMessage({ type: 'CHECK_ACCESS', hostname: currentHostname(), url: location.href });
       if (!status || !status.granted) goToBlockedPage(location.href);
     } catch {
       // extension context invalidated (reload/update) — nothing to enforce
