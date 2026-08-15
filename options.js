@@ -66,7 +66,6 @@ async function loadSettings() {
   document.getElementById('trustHalfLifeMin').value = settings.trustHalfLifeMin;
   document.getElementById('trustOverrideBoost').value = settings.trustOverrideBoost;
   document.getElementById('trustMaxDiscount').value = settings.trustMaxDiscount;
-  document.getElementById('longFormDwellMin').value = settings.longFormDwellMin;
   document.getElementById('extremeLongFormMin').value = settings.extremeLongFormMin;
   document.getElementById('extendOfferWindowMin').value = settings.extendOfferWindowMin;
   document.getElementById('extendGraceMin').value = settings.extendGraceMin;
@@ -115,7 +114,6 @@ document.getElementById('saveSettingsBtn').addEventListener('click', async () =>
     trustHalfLifeMin: parseFloat(document.getElementById('trustHalfLifeMin').value),
     trustOverrideBoost: parseFloat(document.getElementById('trustOverrideBoost').value),
     trustMaxDiscount: parseFloat(document.getElementById('trustMaxDiscount').value),
-    longFormDwellMin: parseFloat(document.getElementById('longFormDwellMin').value),
     extremeLongFormMin: parseFloat(document.getElementById('extremeLongFormMin').value),
     extendOfferWindowMin: parseFloat(document.getElementById('extendOfferWindowMin').value),
     extendGraceMin: parseFloat(document.getElementById('extendGraceMin').value),
