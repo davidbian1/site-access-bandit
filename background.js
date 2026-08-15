@@ -953,7 +953,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // while one grant is active would sail through untouched. A
           // grant only ever covers the one page it was actually made for.
           const grant = store.grants[msg.hostname];
-          const hasGrant = !!grant && !isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN) && isSameSubUrl(msg.url, grant.targetUrl);
+          const notStale = !!grant && !isGrantStale(grant, now, STALE_GRANT_THRESHOLD_MIN);
+          let hasGrant = notStale && isSameSubUrl(msg.url, grant.targetUrl);
+
+          // A grant is requested from wherever you happened to be blocked —
+          // often a general entry point (a homepage, a listing page), not
+          // the specific content you actually meant to reach. Without this,
+          // the very first click into real content right after being
+          // granted would immediately fail the check above and re-gate —
+          // exactly the interruption this mechanism exists to avoid. The
+          // first real navigation after a fresh grant spends its one free
+          // hop (see makeGrant in lib/background-helpers.js) instead, and
+          // that's also where targetUrl updates to wherever this landed —
+          // from then on, THAT'S the one sub-URL this grant covers. Only
+          // the consuming (real-navigation) path can spend it; the non-
+          // consuming initial-load peek never does, so a fresh tab/page
+          // load to a different sub-URL still requires its own decision.
+          if (notStale && !hasGrant && msg.consume && !grant.hopUsed) {
+            hasGrant = true;
+            grant.targetUrl = msg.url;
+            grant.hopUsed = true;
+            await setStore({ grants: store.grants });
+          }
           let inGrace;
           if (hasGrant) {
             // The grant alone already covers this navigation (same sub-URL) —
