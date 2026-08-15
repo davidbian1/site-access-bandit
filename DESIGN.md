@@ -235,6 +235,38 @@ moment the URL changes, so every new video/post/page gets its own fresh
 decision. The stated reasoning: duration-based limits are meaningless if
 navigating to the *next* thing is free.
 
+**Grant scope is enforced by sub-URL identity, not just hostname.** DNR's
+block rule and the registered content scripts both have to be
+hostname-wide — that's the only granularity a `matches` pattern supports —
+so without a further check, *any* page on a granted hostname would read
+as covered for as long as some grant exists anywhere on that site: a
+fresh tab to a different video while one grant is active would sail
+through untouched, since DNR isn't even blocking that hostname at all
+while a grant exists. `isSameSubUrl` (`lib/config.js`) closes this —
+`CHECK_ACCESS` (both the per-navigation, hop-consuming call and the
+non-consuming initial-page-load peek) requires the current URL's origin,
+pathname, and query string to match the grant's own `targetUrl`; only the
+hash fragment is ignored (scroll anchors, in-page state — never a
+distinct piece of content). The query string is deliberately *not*
+ignored in general, matching the same reasoning behind content.js's
+navigation debounce: some sites encode content identity there (`?v=
+VIDEO_ID` on a shared `/watch` path), so stripping it would make every
+video on a site with that pattern read as "the same page."
+
+This asymmetry is intentional, not incidental: staying on the exact
+granted sub-URL is treated as leniently as possible (see the section
+below); navigating to *any* different one — even within the same
+hostname, even via a fresh tab rather than an in-page navigation — is
+treated as a genuinely new decision by default. Interrupting mid-page is
+more likely to cut off real engagement; interrupting right after a
+redirect is more likely to catch exactly the kind of one-thing-leads-to-
+another drift the whole gate exists for. Grace credits (below) are the
+one deliberate, earned exception to the second half of that — a plain
+same-sub-URL grant and a grace credit are independent ways to pass, so
+`CHECK_ACCESS` checks the grant first and only touches (and only ever
+spends) banked grace when the grant alone doesn't already cover the
+request.
+
 ## Override wait — grows with abuse, shrinks with demonstrated patience
 
 Getting the "I really need this" button to even become pressable takes a
@@ -306,31 +338,41 @@ extend do — a straightforward "spend a moment of effort instead of
 watching a clock" release valve rather than another abuse ramp. Whether
 it needs one is an open question, not a decision either way.
 
-## Long-form dwell (automatic) vs. extreme long-form extend (effort-gated)
+## Staying on the granted page (automatic, unbounded) vs. extreme long-form extend (effort-gated)
 
-Two thresholds, treated deliberately differently:
+Two different mechanisms, easy to conflate, kept deliberately distinct:
 
-- `longFormDwellMin` (default 8 min): if you're still actively watching
-  when a grant's timer runs out and you'd already dwelled this long, the
-  extension silently re-asks the bandit with the current context instead
-  of hard-cutting you — the only automatic, effort-free exception
-  anywhere in the system, and it only ever applies to staying on the
-  *same* page. The actual threshold used is `min(longFormDwellMin,
-  grant.durationMin)`, not the flat 8 minutes alone — otherwise the
-  shortest arm (5 min, below the 8-minute default) could never reach the
-  floor before its own grant expired, making it structurally exempt from
-  this protection no matter how attentively it was used. Fully using a
-  short grant is itself a genuine engagement signal, just like fully
-  using a long one is.
-- `extremeLongFormMin` (default 45 min): if a session you're navigating
-  *away* from ran this long, the blocked page you land on offers
+- **Staying on the exact granted sub-URL, past the grant's own timer**
+  (`handleExpiry` in `background.js`): unconditional and automatic — no
+  bandit re-ask, no dwell threshold, no cap on how many times it renews.
+  As long as the active/focused tab is still showing precisely the page
+  the grant was made for (`isSameSubUrl`, above), the timer running out
+  just silently pushes `expiresAt` forward by another `durationMin` and
+  reschedules the `expire:` alarm. This replaced an earlier design
+  (`isLongFormEngaged`, an 8-minute dwell floor) that re-asked the bandit
+  on expiry instead — which could still deny, hard-cutting sustained
+  viewing anyway. A real report was specific about this: interrupting
+  *mid*-page is more likely to be the wrong call (edge cases like long-
+  form video are exactly where that costs the most), so until the bandit
+  is trained well enough on real data to make that call itself, the
+  default doesn't ask — it just doesn't interrupt. The moment the tab
+  moves to anything else, or loses focus entirely, this stops applying
+  and the session finalizes normally; `CHECK_ACCESS`'s own sub-URL check
+  is what actually re-gates a real navigation, immediately and by
+  default, with no leniency of its own.
+- **Extend, after an extremely long session already ended**
+  (`extremeLongFormMin`, default 45 min): if a session you're navigating
+  *away* from ran this long, the blocked page you land on next offers
   "Continue watching" for `extendOfferWindowMin` (default 2 min) before
-  the offer lapses — the effort-gated extend mechanic above.
+  the offer lapses — a deliberate, effort-gated exception (the same
+  wait-and-hold shape as override), not an automatic one, and it's about
+  the page you're headed *to*, not the one you stayed on.
 
-Stated reasoning for the split: staying put isn't really "one more site
-to gate," but navigating to something new always is, by design — the
-extreme-session exception exists because that's still a strong enough
-signal to be worth a narrow, effortful escape hatch.
+The first mechanism is unconditionally lenient about time on one page;
+the second is deliberately hard to reach and is about what happens next.
+Neither one relaxes the default on navigating somewhere new — that's
+still a fresh decision every time, which is the entire point of
+per-navigation gating.
 
 ## Code layout
 
@@ -662,6 +704,42 @@ This is a heuristic, not an exhaustive list — a false negative here (some
 site's actual content living under one of these prefixes) just means that
 one subdomain goes ungated, a much smaller cost than routinely breaking
 authentication for every managed site.
+
+## Reconciling already-open tabs on re-enable (and every service worker start)
+
+Registering a content script only ever affects *future* navigations — a
+tab that was already open and rendered on a managed site when the
+extension got disabled has no way to notice it's been re-enabled on its
+own. It might never navigate again (a video left playing in the same tab
+indefinitely is exactly the case that matters most), so waiting for the
+next navigation to fix things could mean never. Found from a real report:
+re-enabling only affected tabs opened *after* the fact, not ones that
+were already open through the disable/enable cycle.
+
+There is no reliable "I was just re-enabled" signal available to a
+service worker — a cold start looks the same whether it's caused by
+re-enabling the extension, the computer waking from sleep, or ordinary
+MV3 idle unloading, and none of those differ observably from the
+extension's own code. Rather than trying to infer the cause,
+`reconcileOpenTabs` (`background.js`) sidesteps the question: on every
+service worker start (the same top-level-code hook that already runs the
+heartbeat-gap check), it walks every managed site's currently-open tabs
+and checks each one directly with `hasLiveContentScript` —
+`chrome.tabs.sendMessage(tabId, {type: 'PING'})`, which rejects if
+nothing in that tab is listening, since `content.js` now answers it. Only
+tabs that fail the ping get `content-main.js`/`content.js` (re-)injected.
+
+This makes the fix idempotent by construction rather than by careful
+sequencing: a tab that was never actually disconnected (the computer
+merely slept while the tab stayed open and alive) just answers the ping
+and is left alone — no risk of double-injecting a live tab and ending up
+with duplicate navigation listeners. A tab that lost its content script
+for any reason, disable/re-enable being the common one, gets it back, and
+re-injection re-runs `content.js`'s own initial-load check — if that tab
+turns out not to actually be covered by a valid grant for its current
+page, it gets redirected to `blocked.html` immediately as part of the
+same pass, not left running ungated until some other event happens to
+trigger it.
 
 ## Known limitations (MVP scope)
 

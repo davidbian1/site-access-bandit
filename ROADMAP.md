@@ -53,13 +53,19 @@ Developer mode → Load unpacked) and walk through, on a real managed site:
 1. Add a site, confirm it's immediately blocked (DNR rule + registered
    content scripts, including an already-open tab getting redirected).
 2. Request access, get granted, confirm the grant actually expires and
-   re-gates on the next navigation.
+   re-gates on the next navigation to a *different* sub-URL — but confirm
+   staying on the exact granted page (e.g. the same video) past the
+   timer does NOT interrupt, and keeps not interrupting indefinitely as
+   long as you stay there and the tab stays focused.
 3. Get denied, wait out the override delay, hold the override button,
    confirm access and confirm the grace window actually lets a few
    navigations through before re-gating.
-4. Let a session run long enough to hit `longFormDwellMin`/
-   `extremeLongFormMin`, confirm the silent re-draw and the "continue
-   watching" offer both appear and both work.
+4. Open a fresh tab to a *different* video/page on a site you already
+   have a grant on (from step 2) and confirm it gets gated normally —
+   this is the sub-URL-scoping fix; before it, a grant on one page
+   silently covered the whole hostname. Separately, let a session run
+   long enough to hit `extremeLongFormMin` when navigating away, and
+   confirm the "continue watching" offer appears and works.
 5. Start free time from the popup (confirm the chips appear, confirm an
    in-progress grant actually ends, confirm every managed site is
    genuinely reachable with zero prompts for the window). Confirm "End
@@ -68,10 +74,13 @@ Developer mode → Load unpacked) and walk through, on a real managed site:
    own right at the natural end, not delayed until the next unrelated
    event.
 6. Disable the extension for a few minutes with a managed site open in
-   another tab, re-enable it, confirm the unmonitored-gap reconstruction
-   shows up in the trends table (needs the `history` permission actually
-   granted — Chrome will prompt on first load after this permission was
-   added).
+   another tab, re-enable it, and confirm two separate things: (a) the
+   unmonitored-gap reconstruction shows up in the trends table (needs the
+   `history` permission actually granted — Chrome will prompt on first
+   load after this permission was added), and (b) that same still-open
+   tab is actually re-gated/re-enforced without needing to reload or
+   navigate it manually — try navigating within it (client-side routing)
+   and confirm CHECK_ACCESS fires correctly, not just on a fresh load.
 7. Open the options page, exercise every settings field, the debug tables
    (both bandits), session export, and clear-history.
 8. On a managed site with a real sign-in flow through an identity
