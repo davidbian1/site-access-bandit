@@ -1,13 +1,19 @@
 // Runs in the isolated world (has chrome.* API access). A grant only ever
-// covers the one page it was requested for — the moment the page navigates
-// to anything else, this ends that grant and sends the tab back through the
-// blocked page so the next destination gets its own fresh bandit decision.
-// That's the default for every navigation, with exactly one exception: an
-// active grace credit (see background.js's consumeGrace) — banked either by
-// a successful override, or by spending the same wait-and-hold effort to
-// "extend" an extremely long session (see blocked.js) — lets a navigation
-// through without re-gating. Each use spends one hop of that credit; there
-// is no automatic, effort-free pass-through.
+// covers one sub-URL — the moment the page navigates to a *different* one,
+// this ends the session and sends the tab back through the blocked page so
+// the next destination gets its own fresh bandit decision. That's the
+// default for every navigation, with two exceptions, both decided by
+// background.js's CHECK_ACCESS, not here:
+// - `status.granted` — either the destination is still the exact sub-URL
+//   the grant covers (isSameSubUrl, lib/config.js), or this is the grant's
+//   one free first-hop navigation off of wherever it was originally
+//   requested from (see makeGrant's hopUsed in lib/background-helpers.js).
+// - `status.grace` — an active grace credit (see background.js's
+//   consumeGrace) — banked either by a successful override, or by spending
+//   the same wait-and-hold effort to "extend" an extremely long session
+//   (see blocked.js) — lets a navigation through without re-gating. Each
+//   use spends one hop of that credit; there is no automatic, effort-free
+//   pass-through beyond the two exceptions above.
 //
 // Real navigation-call detection happens in content-main.js, which runs in
 // the page's own MAIN world (isolated-world overrides of history.pushState/
