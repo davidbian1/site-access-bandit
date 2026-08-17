@@ -4,6 +4,7 @@ node_modules/
 Thumbs.db
 DESIGN_DECISIONS.md
 AUDIT.md
+HANDOFF.md
 __pycache__/
 *.pyc
 .pytest_cache/
