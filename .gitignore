@@ -5,6 +5,7 @@ Thumbs.db
 DESIGN_DECISIONS.md
 AUDIT.md
 HANDOFF.md
+.handoff/
 __pycache__/
 *.pyc
 .pytest_cache/
